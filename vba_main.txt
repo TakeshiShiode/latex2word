@@ -1,0 +1,12 @@
+Sub テキストファイル操作()
+Dim myFile As String, myLine As String, myChar As String
+
+myFile = "interface20220510_content.tex"
+Open myFile For Input As #1
+Do Until EOF(1)
+    myChar = Input(1, 1)
+'    ThisDocument.Range.InsertAfter myLine & vbCr
+    Debug.Print myChar
+Loop
+Close #1
+End Sub
