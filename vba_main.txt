@@ -1,12 +1,42 @@
 Sub テキストファイル操作()
 Dim myFile As String, myLine As String, myChar As String
+Dim texCom As String
 
-myFile = "interface20220510_content.tex"
+Dim State As Integer
+Dim seekcnt As Integer
+Dim FileNumber As Integer
+
+State = 0
+seekcnt = 1
+
+myFile = "C:\git_repo\latex2word\interface20220510.tex"
+FileNumber = FreeFile
+
 Open myFile For Input As #1
 Do Until EOF(1)
     myChar = Input(1, 1)
+    
+    Select Case State
+        Case 0
+            If myChar = "\" Then
+                State = 1
+            End If
+        Case 1
+            If (myChar = "[") Or (myChar = "{") Then
+                State = 2
+                Debug.Print texCom
+                seekcnt = Mod_layout.LatexCommand_layout(FileNumber, seekcnt, texCom)
+            Else
+                texCom = texCom + myChar
+            End If
+        Case 2
+        Case Else
+            Debug.Print myChar
+    End Select
+    
 '    ThisDocument.Range.InsertAfter myLine & vbCr
     Debug.Print myChar
+    seekcnt = seekcnt + 1
 Loop
 Close #1
 End Sub

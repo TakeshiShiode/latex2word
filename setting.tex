@@ -1,0 +1,77 @@
+\usepackage[dvipdfmx]{color}
+\usepackage[dvipdfmx]{graphicx}
+\usepackage{tabularx}
+\usepackage{amsmath,amssymb}
+\usepackage{alltt}
+\usepackage{ulem}
+\usepackage[dvipdfmx,bookmarks = true,bookmarksnumbered = true, bookmarkstype = toc,bookmarksdepth = 3,linkcolor = black, colorlinks = true,urlcolor = blue]{hyperref}
+\usepackage{pxjahyper}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{lscape}
+\usepackage{pdflscape}%?????I??Landscape??y?[?W????]????????
+
+% derived from:
+% 'dmesh.sty' written by Tetsuya Kimata <t_kimata@easter.kuee.kyoto-u.ac.jp>
+% $Id: dmesh.sty 16 2005-02-27 13:31:19Z svn $
+%\usepackage{fancybox}
+%\fancyput(-0.7in,-9.5in){
+% \color[rgb]{0.85,0.85,0.85}{
+%  \rotatebox{50}{
+%   \scalebox{11}{\textsf{CONFIDENTIAL}}
+%  }
+% }
+%}
+\usepackage{fancyhdr}
+\usepackage[abs]{overpic} % ????s????
+\usepackage{tikz}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+
+\usepackage{times}
+
+\usepackage{bxpapersize}% 'size=real'????????????
+
+\usepackage{nccmath}
+\renewcommand{\rmdefault}{ptm}
+
+
+\setlength{\voffset}{-60pt}
+\setlength{\hoffset}{-20pt}
+\setlength{\topmargin}{20pt}
+\setlength{\headsep}{20pt}
+\setlength{\headheight}{0pt}
+\setlength{\textheight}{771pt}
+\setlength{\footskip}{6pt}
+\setlength{\textwidth}{55zw}
+\setlength{\oddsidemargin}{0pt}
+
+\makeatletter
+\renewcommand{\section}{\@startsection{section}{1}{\z@}%
+{1.5\Cvs \@plus.5\Cvs \@minus.2\Cvs}%
+{1sp}%%{.5\Cvs \@plus.3\Cvs}%
+{\reset@font\Large\mcfamily\bfseries}}
+\makeatother
+
+\makeatletter
+\renewcommand{\subsection}{\@startsection{subsection}{1}{\z@}%
+{1.5\Cvs \@plus.5\Cvs \@minus.2\Cvs}%
+{1sp}%%{.5\Cvs \@plus.3\Cvs}%
+{\reset@font\Large\mcfamily\bfseries}}
+\makeatother
+
+
+\pagestyle{fancy}
+\setlength{\headheight}{0pt}
+\lhead{\begin{minipage}{20mm}
+\vspace*{-10mm}
+\hspace*{155mm}
+%\includegraphics[width=25mm]{book1-crop.pdf}
+\end{minipage}}
+\rhead{\leftmark}
+%\lhead{\leftmark}
+%\rhead{\rightmark}
+%\markright{\thesection}
+\setlength{\baselineskip}{15pt}
+\setcounter{tocdepth}{3}

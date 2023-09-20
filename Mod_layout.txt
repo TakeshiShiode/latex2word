@@ -1,0 +1,58 @@
+Function LatexCommand_layout(fileNum As Integer, seekcnt As Integer, command As String) As Integer
+    
+    Dim ret_seekcnt As Integer
+    
+    Select Case command
+        Case "documentclass"
+            ret_seekcnt = ComDocClass(fileNum, seekcnt)
+        
+        Case Else
+            Debug.Print command
+    End Select
+    
+    LatexCommand_layout = ret_seekcnt
+End Function
+'Option Explicit
+
+Function ComDocClass(fileNum As Integer, seekcnt As Integer) As Integer
+    
+    Dim ret_seekcnt As Integer
+    Dim parameter(10) As String, article As String
+    Dim array_cnt As Integer
+    
+    Dim docState As Integer
+    
+    docState = 0
+    Erase parameter
+    
+    Seek #fileNum, seekcnt + 1
+    Do Until myChar = "}"
+        myChar = Input(1, 1)
+        Debug.Print myChar
+        
+        Select Case State
+            Case 0
+                If (myChar = ",") Then
+                    array_cnt = array_cnt + 1
+                ElseIf (myChar = "]") Then
+                    State = 1
+                Else
+                    parameter(array_cnt) = parameter(array_cnt) + myChar
+                End If
+            Case 1
+                If (myChar = "{") Then
+                    State = 2
+                End If
+            Case 2
+                If (myChar <> "}") Then
+                    article = article + myChar
+                End If
+            Case Else
+            
+        End Select
+            
+        ret_seekcnt = ret_seekcnt + 1
+    Loop
+    ComDocClass = ret_seekcnt
+End Function
+
