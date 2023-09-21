@@ -1,0 +1,250 @@
+\newpage
+\section{シミュレーション評価}
+SIMULINK上のBLDCモデルをe2studioでデバッグします。表(\ref{RX62T-TestDirectory})にシミュレーション環境のディレクトリ構成を記載します。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{シミュレーション評価環境のディレクトリ構造(Cドライブ直下)}
+\label{RX62T-TestDirectory}
+\begin{tabular}{|l|l|l|}
+\hline
+bldc\_test & e2Studio環境       & 説明                                 \\ \hline
+-          & generate         & RX62Tマイコン設定プログラム類(自動生成)            \\ \hline
+-          & HardwareDebug    & RX62T実行ファイル一式(.x、.abs等)            \\ \hline
+-          & matlab\_dll      & MATLABとのプロセス間通信用VisualStudioプロジェクト \\ \hline
+-          & simulink         & SIMULINKモデルおよびプロセス間通信用.DLL一式       \\ \hline
+-          & SmartManual Docs & RX62Tスマートマニュアル関連(未使用)              \\ \hline
+-          & src              & BLDCサンプルプログラム一式                    \\ \hline
+           & .project         & RX62T用e2Studioプロジェクト               \\ \hline
+           &                  &                                    \\ \hline
+qemu-6.0.0 & QEMU環境           &                                    \\ \hline
+-          & rx-bin           & RX62Tエミュレーター：qemu-system-rx.exe    \\ \hline
+\end{tabular}
+\end{table}
+}
+
+図(\ref{abstruct})より、SIMULINKモデルとはQEMUからプロセス間通信でフィードバック制御を行い、e2studioはQEMU上で走るRX62Tマイコンのプログラムをリモートデバッグしています。これにより、実質的にSIMULINKモデルと連動して制御する形となります。
+\subsection{gdbの準備}
+e2studioのデバッグ環境を設定します。まず、QEMU上で走るRXマイコン用実行ファイルをリモートデバッグするためのgdbアプリを用意します。これはOpenSourceToolsforRENESAS
+\footnote{\href{https://llvm-gcc-renesas.com/ja/rx-download-toolchains/}{\underline{https://llvm-gcc-renesas.com/ja/rx-download-toolchains/}}}というサイトからダウンロードできます。オープンソースですので無償ですが、ダウンロードにあたってユーザー情報を登録する必要があります。登録手続きを避けたいという場合は、GNU-GDBからmakeする方法もありますがこの場合はgccなど別途make環境が必要です。必要に応じて使い分けると良いでしょう。筆者はgcc環境としてMSYS2を使用しました。以下にmakeのコマンドを記載します。
+\paragraph{gdbからrx-elf-gdbのmakeコマンド(gdb-11.2)}
+{\small
+\begin{alltt}
+    cd work/gdb-11.2        ← /c/workディレクトリ以下にgdbを解凍した前提で記述
+    mkdir build             ← gdb以下にbuildディレクトリをつくる
+    cd build                ← buildディレクトリに移動して以下configureを実行
+    ../configure --prefix=/c/work/gdb-11.2/rx-elf --target=rx-elf --disable-werror
+     LDFLAGS=-Wl, --allow-multiple-definition
+    make                ↑エラー回避のため"--disable-werror",　"--allow-multiple-definition"を設定
+    make install
+\end{alltt}
+}
+
+\newpage
+\subsection{e2studioのデバッグ設定}
+gdbをe2studioのデバッグ設定から呼び出すよう設定します。e2studioからデバッグ設定を開きます。
+\begin{figure}[htbp!]
+\begin{center}
+\includegraphics[width=15cm]{figures/e2debug-conf-trim.pdf}
+\end{center}
+\caption{デバッグ設定を開く}
+\label{e2debug-conf}
+\end{figure}
+
+デバッグ設定を開いたら図(\ref{debug-conf1})、図(\ref{debug-conf2})のように設定します。
+\begin{figure}[htbp!]
+ \begin{minipage}{0.5\hsize}
+  \begin{center}
+   \includegraphics[width=80mm]{figures/debug-conf1-crop.pdf}
+  \end{center}
+  \caption{実行ファイルは.xのものを選択}
+  \label{debug-conf1}
+ \end{minipage}
+ \begin{minipage}{0.5\hsize}
+  \begin{center}
+   \includegraphics[width=80mm]{figures/debug-conf2-crop.pdf}
+  \end{center}
+  \caption{デバッガと接続文字列の指定}
+  \label{debug-conf2}
+ \end{minipage}
+\end{figure}
+以上で、デバッグ設定は完了です。
+
+\newpage
+\subsection{シミュレーションの実行}
+\subsubsection{QEMUの起動}
+まず初めに、RX用のQEMUを起動します。qemu-system-rx.exeのあるディレクトリで以下のコマンドを実行してください。
+ここでは、c/git\_repo/qemu-6.0.0/rx-bin以下にqemu-system-rx.exeがあるとしています。
+{\small
+\begin{alltt}
+    ------------------------msys2の場合-----------------------------------
+    cd git\_repo/qemu-6.0.0/rx-bin
+    ./qemu-system-rx -S -gdb tcp::1234 -M gdbsim-rx62t
+     -kernel /c/work2020/renesas\_rx/workspace/bldc\_test/
+    HardwareDebug/bldc\_test.x
+
+    -------------------------DOSプロンプトの場合------------------------------
+    C:{\yen}git\_repo{\yen}qemu-6.0.0{\yen}rx-bin>qemu-system-rx.exe -S -gdb tcp::1234
+     -M gdbsim-rx62t -kernel c:{\yen}work2020{\yen}renesas\_rx{\yen}workspace{\yen}bldc\_test{\yen}HardwareDebug{\yen}bldc\_test.x
+\end{alltt}
+}
+\begin{figure}[htbp!]
+    \begin{center}
+    \includegraphics[width=10cm]{figures/start-qemu-crop.pdf}
+    \end{center}
+\caption{QEMUの起動画面}
+\end{figure}
+\newpage
+
+\subsubsection{gdbをQEMUへ接続}
+次に、gdbをQEMUに接続します。図(\ref{start-gdb})に示すように、先程設定したrx-elf-gdbデバッグを開始します。開始時にパースペクティブ切替の確認がありますので続行します。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=19cm]{figures/start-gdb-crop.pdf}
+    \end{center}
+    \caption{gdbとの接続}
+    \label{start-gdb}
+\end{figure}
+QEMUと接続できると、PowerON\_Reset関数のところで停止してデバッグ開始待ちになりますので、この状態で次のSIMULINKの接続へ進みます。
+
+\subsubsection{SIMULINKモデルとの接続}
+最後にSIMULINKモデルと接続します。まず、MATLAB上でモーターのパラメータ設定とQEMUとのプロセス間通信のためのDLLを読み込みます。図(\ref{mfile})に示すように、設定用Mファイル(bldc\_prm.m)を実行します。次に、SIMULINKモデルのシミュレーション実行ボタンをクリックします。するとシミュレーション実行状態でSIMULINKが待機します。これで準備完了です。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=17cm]{figures/mfile-crop.pdf}
+    \end{center}
+    \caption{シミュレーション前にbldc\_prm.mを実行}
+    \label{mfile}
+\end{figure}
+
+\subsubsection{連携シミュレーション実行}
+e2studioからデバッグを開始すると、SIMULINK側のモデルも連動して走り出します。途中でe2Studioデバッグの一時停止ボタンをクリックして、SIMULINKが停止することを試してみて下さい。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=17cm]{figures/simstart-crop.pdf}
+    \end{center}
+    \caption{シミュレーション開始}
+    \label{simstart}
+\end{figure}
+
+\subsubsection{シミュレーション中のキーボード操作}
+図(\ref{bord})の実機基板のSW操作を再現するため、キーボードにSW機能を割り当てています。表(\ref{keybord})に機能の割当てを示します。
+VR1については固定値としています。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{シミュレーション時のキーボード操作}
+\label{keybord}
+\begin{tabular}{|l|l|l|}
+\hline
+\multicolumn{1}{|c|}{キーボード} & \multicolumn{1}{c|}{役割} & 備考                  \\ \hline
+Sボタン                        & モーター駆動切替え               & 押す毎に始動～加速、減速～停止を切替え \\ \hline
+Rボタン                        & リセット機能                  & エラー解除等              \\ \hline
+VR1                      & 割当てなし                   & 検討中のため              \\ \hline
+\end{tabular}
+\end{table}
+}
+
+\newpage
+\section{実機評価}
+実機側は現在評価中のため、ここでは省略します。
+%\subsection{デバッグ設定}
+%実機動作確認の手順を示します。図(\ref{実機環境})のようにデバッガーと基板を接続したらe2studioを立上げて、デバッグの構成から"RenesasHardwareDebugging"を選択して新規追加でデバッグ構成を追加します。
+%\begin{figure}[htbp!]
+% \begin{minipage}{0.5\hsize}
+%  \begin{center}
+%   \includegraphics[width=80mm]{figures/debug-conf3-crop.pdf}
+%  \end{center}
+%  \caption{実行ファイルは.xを選択}
+%  \label{debug-conf3}
+% \end{minipage}
+% \begin{minipage}{0.5\hsize}
+%  \begin{center}
+%   \includegraphics[width=80mm]{figures/debug-conf4-crop.pdf}
+%  \end{center}
+%  \caption{Debuggerタブ設定}
+%  \label{debug-conf4}
+% \end{minipage}
+%\end{figure}
+%
+%設定が出来たら、シミュレーション時と同様にデバッグを開始すると、e2studioのパースペクティブが切り替わって開始します。
+%\subsection{基板SW操作}
+%デバッグ時の基板操作について表(\ref{bord-conf})に示します。
+%{\small
+%\begin{table}[htbp!]
+%\centering
+%\caption{基板SW類操作について}
+%\label{bord-conf}
+%\begin{tabular}{|l|l|l|}
+%\hline
+%\multicolumn{1}{|c|}{名称} & \multicolumn{1}{c|}{役割} & 備考                 \\ \hline
+%電源SW                     & 主電源                     &                    \\ \hline
+%SW1                      & モーター駆動切替え               & ON：始動～加速、OFF：減速～停止 \\ \hline
+%SW2                      & リセットボタン                 & エラー解除等             \\ \hline
+%VR1                      & 速度設定                    & 時計回りで増速設定          \\ \hline
+%VR2                      & 未使用                     &                    \\ \hline
+%\end{tabular}
+%\end{table}
+%}
+%
+%\begin{figure}[htbp!]
+%   \begin{center}
+%       \includegraphics[width=9cm]{figures/基板構成-crop.pdf}
+%   \end{center}
+%   \caption{基板SW類}
+%   \label{bord}
+%\end{figure}
+%
+%\newpage
+%\subsection{リアルタイムチャートによる波形確認とログトレース}
+%e2studioに備え付けのリアルタイムチャート機能を使用すると変数の値をトレースしてグラフ化してくれます。オシロスコープほどの機能ではありませんが、計測器がない状態でも簡易的に波形評価が可能です。またグラフデーターをCSVファイルにエクスポートすることも出来ます。図(\ref{realtimechart})に紹介します。
+%\begin{figure}[htbp!]
+%   \begin{center}
+%       \includegraphics[width=15cm]{figures/realtimechart-crop.pdf}
+%   \end{center}
+%   \caption{リアルタイムチャート機能による波形確認}
+%   \label{realtimechart}
+%\end{figure}
+%
+%\newpage
+\section{評価結果}
+\subsection{結果とまとめ}
+シミュレーションと実機によりブラシレスDCモーターの制御を評価しました。結果を以下図(\ref{testgraph})、(\ref{testgraph-sim})に示します。
+\begin{figure}[htbp!]
+% \begin{minipage}{0.5\hsize}
+%  \begin{center}
+%   \includegraphics[width=80mm]{figures/testgraph-crop.pdf}
+%  \end{center}
+%  \caption{実機評価波形(リアルタイムチャートよりエクスポート)}
+%  \label{testgraph}
+% \end{minipage}
+ \begin{minipage}{1.0\hsize}
+  \begin{center}
+   \includegraphics[width=100mm]{figures/testgraph-sim-crop.pdf}
+  \end{center}
+  \caption{シミュレーション評価波形(SIMULINKデータをグラフ化)}
+  \label{testgraph-sim}
+ \end{minipage}
+\end{figure}
+
+結果より、始動制御後、id電流を極力抑えて(目標値0[A])駆動側のiq電流に出力を振り分けていることが分かります。
+現在評価中の実機評価の結果が出来次第、比較予定です。
+%シミュレーションのほうが駆動用のiq電流が高く出ていることがわかります。
+%SIMULINKでのモデリングの際、表(\ref{bldcprm})のパラメータを設定しましたが、慣性モーメントJや粘性摩擦Dは試行錯誤による予測値のため、
+%結果的に実機と比べて高い負荷となってしまったと考えます。その他、速度、id電流は概ね、実機に近い傾向となりました。
+
+\subsection{シミュレーション用にカスタマイズした箇所}
+シミュレーションのため実機用プログラムから変更している箇所を表(\ref{custom})となります。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{シミュレーション用に実機設定から変更した箇所}
+\label{custom}
+\begin{tabular}{|l|c|c|l|}
+\hline
+\multicolumn{1}{|c|}{変更箇所}                                                  & 実機時    & \multicolumn{1}{l|}{シミュレーション時} & \multicolumn{1}{c|}{変更理由} \\ \hline
+\begin{tabular}[c]{@{}l@{}}電流センサーローパスフィルタゲイン\\ LPF\_K\_CURRENT\end{tabular} & 0.1    & 1                              & シミュレーション時はノイズが無いため不要      \\ \hline
+始動制御時の角度設定                                                                  & 0°→90° & 0°→0°                          & シミュレーション時は初期位相が0°固定のため    \\ \hline
+\end{tabular}
+\end{table}
+}

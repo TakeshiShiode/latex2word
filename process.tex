@@ -1,0 +1,253 @@
+\documentclass[uplatex,a4paper,twoside,10pt]{jsarticle}
+\input{setting}
+\begin{document}
+\newpage
+\section{プロセス間通信}
+前章で、MATLABとのデーター共有のための共有メモリ、およびSIMULINKモデルからシミュレーション時のタイマーサンプリングを通知するためのイベントをQEMU側に用意しました。ここではこれらの共有リソースにアクセスし、QEMUとの同期をとるためのプロセス間通信部を作成します。
+作成したプロセス間通信機能はDLL(ダイナミックリンクライブラリとしてMATLABへ読込み、MATLAB関数としてSIMULINKモデルから呼び出すことが可能です。表(\ref{dllfunc})にMATLAB側に読込むDLL関数の一覧を示します。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{DLLの公開関数一覧}
+\label{dllfunc}
+\begin{tabular}{|l|l|l|}
+\hline
+関数名                & 引数          & 用途         \\ \hline
+MatlabHandleInit      & - & プロセス間通信初期化 \\ \hline
+MatlabReqInt\_BLDC    & - & 割込通知       \\ \hline
+MatlabGetBLDC\_PWM\_U & - & U相PWM取得    \\ \hline
+MatlabGetBLDC\_PWM\_V & - & V相PWM取得    \\ \hline
+MatlabGetBLDC\_PWM\_W & - & W相PWM取得    \\ \hline
+MatlabSetBLDCData &
+  \begin{tabular}[c]{@{}l@{}}double pos, double vdc, double iu, double iw, \\ double omega\end{tabular} &
+  \begin{tabular}[c]{@{}l@{}}角度、インバーター電圧、\\ 電流、角速度取得\end{tabular} \\ \hline
+\end{tabular}
+\end{table}}
+
+\subsection{プロセス間通信の初期化}
+共有メモリ、およびイベントへのアクセスはそれぞれのハンドル名にて行います。QEMU側でリソースを生成したときの名称は、それぞれ表(\ref{sharedmemoryhandle})および表(\ref{processevent})となっていました。これを参照します。
+共有リソースの参照を含め、プロセス間通信部の初期化を以下のように実装します。
+{\small
+\begin{alltt}
+static const LPCWSTR MatlabSendEventName = TEXT(\textcolor{red}{"MatBLDCTimerInt"}); //共有イベント名
+static const LPCTSTR MatlabSharedMemoryName = TEXT(\textcolor{red}{"MatBLDCSharedMemory"});　//共有メモリ名
+static HANDLE   EvMatSend = NULL;
+static HANDLE   MatMemoryHandle = NULL; //!< Handle shared memory for register values.
+static BYTE     *pMatMemory = NULL;     //!< Pointer to the shared memory for commands.
+/* -------------------------------------------------------------------------------------- */
+void MatlabHandleInit(double *ret)
+\{
+    *ret = 1;
+    //イベント用ハンドルの初期化
+    EvMatSend = OpenEvent(EVENT_ALL_ACCESS, FALSE, MatlabSendEventName);
+    if (EvMatSend == NULL) \{
+        *ret = 0;
+    \}
+    //共有メモリ用ハンドルの初期化
+    MatMemoryHandle = OpenFileMapping(FILE_MAP_WRITE, FALSE, MatlabSharedMemoryName);
+    if (MatMemoryHandle == NULL) {
+        *ret = 0;
+    }
+    pMatMemory = (BYTE*)MapViewOfFile(MatMemoryHandle, FILE_MAP_WRITE, 0, 0, 0);
+    if (pMatMemory == NULL) \{
+        *ret = 0;
+    \}
+    //共有レジスタアドレスを各モータへ通知
+    SetBLDCMemoryAddress(pMatMemory);
+    //QEMUとの同期設定を初期化
+    gMatComReleaseFlag = false;
+    *(char*)(pMatMemory + Mat_COM_OFFSET) = 1;
+    MatlabInitBLDCData();
+\}
+\end{alltt}}
+
+\subsection{共有メモリによるデーターの受け渡し}
+共有メモリを利用して、位置やPWMのデーターをやりとりします。MATLAB⇔QEMU間の共有データーの内訳は表(\ref{sharedmemory})となっています。
+\subsubsection{SIMULINKモデルからの角度、電流値の受け取り}
+{\bf RX62T搭載低電圧モータ制御評価システム}の仕様より、角度エンコーダーや電流値などのAD変換仕様は表(\ref{DLL-AD})のようになっていました。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{センサへ変換の仕様}
+\label{DLL-AD}
+\begin{tabular}{|l|l|l|}
+\hline
+項目         & 計測範囲                       & AD変換値範囲               \\ \hline
+電流値        & -10{[}A{]}～10{[}A{]}       & 0x0000～0x0FFF(0～4095) \\ \hline
+インバーター母線電圧 & 0{[}V{]}～30{[}V{]}         & 0x0000～0x0FFF(0～4095) \\ \hline
+VR回転速度指令値  & 600{[}rpm{]}～2000{[}rpm{]} & 0x0000～0x0FFF(0～4095) \\ \hline
+エンコーダー解像度  & 1回転(2π)あたり1200{[}cnt{]}    & -                     \\ \hline
+\end{tabular}
+\end{table}}
+
+\begin{figure}[htbp!]
+\begin{center}
+    \includegraphics[width=12cm]{figures/cur-ad-conv-crop.pdf}
+\end{center}
+\caption{電流値[A]とAD値(0～4095)の変換イメージ}
+\label{setbldcdata}
+\end{figure}
+
+これを参考に、SIMULINKによるBLDCの電流値や角度をDLL内でAD、エンコーダー値に変換し、共有メモリに保存します。以下変換と保存の
+DLLプログラムになります。この関数は、SIMULINK上では、図(\ref{setbldcdata})のブロックに実装しています。
+\newpage
+{\small
+\begin{alltt}
+void MatlabSetBLDCData(double pos, double vdc, double iu, double iw, double omega)
+\{
+    //共有メモリ先頭(pBLDCMemory)からのオフセットによる各データアドレスの参照
+    signed short* pTCNT1 = (signed short*)(pBLDCMemory + MTU1_TCNT);
+    signed short* pS12AD0_ADDR0A = (signed short*)(pBLDCMemory + S12AD0_ADDR0A_OFFSET);
+    signed short* pS12AD0_ADDR1 = (signed short*)(pBLDCMemory + S12AD0_ADDR1_OFFSET);
+    signed short* pS12AD0_ADDR2 = (signed short*)(pBLDCMemory + S12AD0_ADDR2_OFFSET);
+    signed short* pS12AD1_ADDR2 = (signed short*)(pBLDCMemory + S12AD1_ADDR2_OFFSET);
+    unsigned char* pMTU1_CLEAR = (unsigned char*)(pBLDCMemory + TCNT1_CLEAR_OFFSET);
+
+    //モーター角度→エンコーダー値(2π/1200)の変換
+    signed short s16_i = 0;
+    double enc_step = pos - gEncCnt;
+    gBLDCPos = gBLDCPos - enc_step;
+    *pTCNT1 = (unsigned short)(gBLDCPos * 1200.0 / (2 * M_PI));
+    gEncCnt = pos;
+    if (*pMTU1_CLEAR == 0) \{
+        gBLDCPos = 0;
+        gEncCnt = 0;
+    \}
+    //電流値の計測とAD変換(U相)
+    s16_i = (signed short)((iu + 10.0) * 4095 / 20);
+    if (s16_i>4095) \{
+        s16_i = 4095;
+    \}
+    if (s16_i<0) \{
+        s16_i = 0;
+    \}
+    *pS12AD0_ADDR0A = (-1) * s16_i;
+    //電流値の計測とAD変換(W相)
+    s16_i = (signed short)((iw + 10.0) * 4095 / 20);
+    if (s16_i > 4095) \{
+        s16_i = 4095;
+    \}
+    if (s16_i < 0) \{
+        s16_i = 0;
+    \}
+    *pS12AD0_ADDR1 = (-1) * s16_i;
+
+    //インバーター母線電圧の計測とAD変換
+    *pS12AD0_ADDR2 = (signed short)( (24 - vdc) * 4095 / 30);
+    VR速度指令値の設定(固定値)
+    *pS12AD1_ADDR2 = 1158.290588*4095/1400;
+\}
+\end{alltt}}
+
+\newpage
+\subsubsection{制御プログラムからSIMULINKモデルへPWM値の入力}
+制御プログラムで計算したUVW各相のPWM指令値をQEMUの共有メモリを経由してSIMULINKモデルへ入力します。制御プログラム側ではUVW各相の指令電圧を
+MTU3、4のPWMコンペアマッチタイマカウント値で入力しますが、図(\ref{simulink-model})のBLDCシミュレーションモデルでは、各相の$v_{ref}$指令電圧の
+形で受け取りたいため、DLL内でPWMタイマカウント値→$v_{ref}$指令値へ変換して渡しています。
+{\small
+\begin{alltt}
+void MatlabGetBLDC_PWM_U(void)
+\{
+    double ret;
+    double duty;
+    signed short* pMTU3_TGRD = (signed short*)(pBLDCMemory + MTU3_TGRD);
+    unsigned char *pMTU_TOERA = (unsigned char*)(pBLDCMemory + MTU_TOERA_OFFSET);
+
+    duty = (float)*pMTU3_TGRD;
+
+    if (*pMTU_TOERA == 0xFF) \{
+        ret = (duty - PWM_PERIOD) * (-1) / PWM_PERIOD;
+    \}
+    else \{
+        ret = 0;
+    \}
+\}
+\end{alltt}}
+
+\subsection{イベントによるタイマー割込みの通知}
+実機ではPWMのキャリア周期毎(100[us])での割込みですが、シミュレーションではSIMULINKモデルでのサンプリング周期を100[us]に設定して
+このタイミングでQEMUへイベントを発行します。QEMUはイベントを受取るとベクトル制御用のタイマ割込みの要求を発行することで、
+QEMU上で走るマイコン側の制御プログラムの割込み処理が起動します。SIMULINKから割込みイベントを発行してもらうためのDLLプログラムを以下に示します。
+{\small
+\begin{alltt}
+void MatlabReqInt_BLDC(void)
+\{
+    unsigned char *debug_simulink = (unsigned char *)pMatMemory;
+    unsigned char *mat_com_int = (unsigned char*)(pMatMemory + MAT_COM_OFFSET);
+
+    if (gMatComReleaseFlag == false) \{
+        debug_simulink = (unsigned char*)pMatMemory;
+        //QEMU側との同期フラグ(前回の割込みが完了するまでwhile待機)
+        while ((*debug_simulink) == 1) \{
+           if (*mat_com_int == 0) \{
+                gMatComReleaseFlag = true;
+                break;
+            \}
+        \}
+        //予め割込み処理中フラグを立てておく(QEMU側割込み処理で解除)
+        *debug_simulink = 1;
+        //割込みイベントをQEMU側へ発行
+        SetEvent(EvMatSend);
+        *ret = 1;
+    \}
+    else \{
+        *ret = 0;
+    \}
+\}
+
+\end{alltt}}
+
+%\section{旧プロセス間通信}
+%QEMUとMATLAB間はプロセス間通信を用いてデーターの共有やイベントのやり取りを行い、センサやPWMデューティの共有と、
+%SIMULINKモデルとデバッガ間の同期を取っています。
+%これらの通信はDLLファイル(ダイナミックリンクライブラリ)として、MATLABにロードして、SIMULINKのシミュレーションから呼出します。
+%\subsection{QEMUとMATLAB間のデータ内訳}
+%SIMULINKとQEMU間での共有データーの内訳について表(\ref{sharedmemory})に示します。
+%{\small
+%\begin{table}[htbp!]
+%\centering
+%\caption{プロセス間共有メモリ内訳}
+%\label{sharedmemory}
+%\begin{tabular}{|l|l|l|}
+%\hline
+%共有メモリアドレス & 名称                   & 用途                 \\ \hline
+%0x00      & QEMU-SIMULINK間同期     & 1:QEMU割込み中、0:非割込み中 \\ \hline
+%0x02      & MTU1\_TCNT           & モーターエンコーダとして使用     \\ \hline
+%0x04      & MTU2\_TCNT           & 未使用                \\ \hline
+%0x06      & MTU3\_TGRD           & U相PWMDuty          \\ \hline
+%0x08      & MTU4\_TGRC           & V相PWMDuty          \\ \hline
+%0x0A      & MTU4\_TGRD           & W相PWMDuty          \\ \hline
+%0x0C      & S12AD0\_ADDR0A       & U相電流検出             \\ \hline
+%0x0E      & S12AD0\_ADDR1        & W相電流検出             \\ \hline
+%0x10      & S12AD0\_ADDR2        & インバーター電圧検出         \\ \hline
+%0x12      & S12AD0\_ADDR3        & 未使用                \\ \hline
+%0x16      & S12AD1\_ADDR1        & 未使用                \\ \hline
+%0x18      & S12AD1\_ADDR2        & VR可変抵抗値検出          \\ \hline
+%0x1A      & S12AD1\_ADDR3        & 未使用                \\ \hline
+%0x1C      & MTU\_TOERA           & PWM出力許可禁止          \\ \hline
+%0x1D      & COM\_OFFSET          & 未使用                \\ \hline
+%0x1E      & TCNT1\_CLEAR\_OFFSET & エンコーダ初期化用          \\ \hline
+%\end{tabular}
+%\end{table}
+%}
+%
+%{\small
+%\begin{table}[htbp!]
+%\centering
+%\caption{プロセス間イベント定義}
+%\label{processevent}
+%\begin{tabular}{|l|l|l|}
+%\hline
+%イベント番号 & 名称              & 用途                  \\ \hline
+%0x00   & SciBLDCTimerInt & MATLAB → QEMUイベント通知 \\ \hline
+%\end{tabular}
+%\end{table}
+%}
+%
+%\newpage
+%\subsection{DLL関数一覧}
+%MATLAB側に読み込まれるDllファイルで公開される関数の一覧を表(\ref{dllfunc})に示します。これらの関数を呼び出すことでセンサや、PWMデューティーの値を相互にやり取りします。
+\end{document}
+
+
+

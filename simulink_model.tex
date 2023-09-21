@@ -1,0 +1,910 @@
+\newpage
+\section{SIMULINKによるBLDCモデリング}
+SIMULINKモデルの作成に向けて、ブラシレスDCモーターの数式モデルを作成します。
+\subsection{ブラシレスDCモータの種類による違い}
+ブラシレスDCモーター({\bf 永久磁石同期電動機:PMSM})には大きく分けて{\bf 表面型永久磁石同期電動機:SPMSM}と{\bf 埋込磁石同期電動機:IPMSM}の2種類があり、モーターの電気的な挙動に違いが有ります。
+以下式(\ref{eq:bldc-eq})と式(\ref{SPMSM})に両者の回路方程式を示します。
+数式的にはSPMSM型の方がUVW相の相互インダクタンスM項を同じ定数として扱えるため式が簡単になります。
+今回の"RX62T搭載低電圧モータ制御評価システム"で使用するブラシレスDCモーターはSPMSM型ですので、
+その電気的な挙動は以下式(\ref{SPMSM})となります。
+\paragraph{IPMSM型}
+{\large
+\begin{align}
+v_{u} &= Ri_{u} + \frac{d}{dt} (L_{u}i_{u} + M_{uv}i_{v} + M_{uw}i_{w}) - \omega_{r} \psi sin\theta \notag \\
+v_{v} &= Ri_{v} + \frac{d}{dt} (L_{v}i_{v} + M_{vu}i_{u} + M_{vw}i_{w}) - \omega_{r} \psi sin(\theta - \frac{2}{3}\pi) \notag \\
+v_{w} &= Ri_{w} + \frac{d}{dt} (L_{w}i_{w} + M_{wu}i_{u} + M_{wu}i_{v}) - \omega_{r} \psi sin(\theta + \frac{2}{3}\pi) \label{eq:bldc-eq}
+\end{align}
+}
+\paragraph{SPMSM型}
+{\large
+\begin{align}
+v_{u} &= Ri_{u} + \frac{d}{dt} (Li_{u} + Mi_{v} + Mi_{w}) - \omega_{r} \psi sin\theta \notag \\
+v_{v} &= Ri_{v} + \frac{d}{dt} (Li_{v} + Mi_{u} + Mi_{w}) - \omega_{r} \psi sin(\theta - \frac{2}{3}\pi) \notag \\
+v_{w} &= Ri_{w} + \frac{d}{dt} (Li_{w} + Mi_{u} + Mi_{v}) - \omega_{r} \psi sin(\theta + \frac{2}{3}\pi) \label{SPMSM}
+\end{align}
+}
+式(\ref{eq:bldc-eq})と式(\ref{SPMSM})の、$v_{u}〜v_{w}$、$i_{u}〜i_{w}$はUVW相の各相電圧、相電流となります。
+ブラシレスDCモーターは3相の入出力を持ちますが、よく見ると$Riや、L\frac{di}{dt}$の項が含まれており、
+ブラシ付きDCモーターの電気的要素も含んでいることがわかります。
+そこに、各相との相互インダクタンスの項が追加された形となっています。
+また、DCモーターと異なりブラシによる整流作用はないため、$\omega$を含む逆起電力項や、駆動のための相電流、電圧は実質交流となります。
+
+一方で、モーターのメカ的な挙動は、式(\ref{DCModel})となります。こちらはDCモータと同じです。
+{\large
+\begin{align}
+F=J\frac{d\omega}{dt} + D\omega \label{DCModel}
+\end{align}
+}
+ブラシ付きDCモーターの場合には、回路方程式から得られる電流iにトルク係数を掛けてメカ側のトルク入力と出来ていました。
+しかしブラシレスDCモーターの場合には、3相の回路方程式となります。式(\ref{SPMSM})より各相が120度の位相差を持つことはわかりますが、
+これらがどのようにメカ側へのトルク入力に変換されるのかが、式(\ref{SPMSM})の状態ではわかりません。
+そこで、式(\ref{eq:bldc-eq})に座標変換を掛けて、メカ側へ入力されるトルク電流の式を導出します。
+\subsection{$\alpha\beta$変換により3相を2相直交座標へ変換}
+ここからモーターのUVW相を2軸に変換していきます。まず、U相と並行に$\alpha$軸を取り、そして$\alpha$軸と直交するように$\beta$軸を取ります。
+モーターのUVW相と$\alpha\beta$軸との関係を図\ref{abaxis}に示します。ここで$\theta_{r}と\omega_{r}$はそれぞれ、U相から磁石までの角度[rad]、
+磁石の回転速度[rad/s]です。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=8cm]{figures/abaxis-crop.pdf}
+    \end{center}
+    \caption{U相を基準として回路方程式を直交$αβ$座標で表現}
+    \label{abaxis}
+\end{figure}
+前述の回路方程式(\ref{SPMSM})に、式\ref{ab-cv}に示す座標変換の式を掛けることによりUVW相を$\alpha$軸、$\beta$軸の2相に変換します。
+{\large
+\begin{align}
+    \begin{bmatrix}
+        \alpha \\
+        \beta
+    \end{bmatrix}
+    = \sqrt\frac{2}{3}
+    \begin{bmatrix}
+        cos0 & cos(-\frac{2}{3} \pi) & cos(\frac{2}{3} \pi) \\
+        sin0 & sin(-\frac{2}{3} \pi) & sin(\frac{2}{3} \pi)
+    \end{bmatrix}
+    \begin{bmatrix}
+        u \\
+        v \\
+        w
+    \end{bmatrix}
+    = \sqrt\frac{2}{3}
+    \begin{bmatrix}
+        1 & -\frac{1}{2} & -\frac{1}{2} \\
+        0 & \frac{\sqrt{3}}{2} & -\frac{\sqrt{3}}{2}
+    \end{bmatrix}
+    \begin{bmatrix}
+        u \\
+        v \\
+        w
+    \end{bmatrix}
+    \label{ab-cv}
+\end{align}
+}
+これにより、式(\ref{SPMSM})が式(\ref{ab-eq})の形に変換出来ます。
+{\large
+\begin{align}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        R+pL' & 0 \\
+        0 & R+pL'
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{\alpha} \\
+        i_{\beta}
+    \end{bmatrix}
+    + \omega_{r}\psi
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        cos\theta_{r}
+    \end{bmatrix}
+    \label{ab-eq}
+\end{align}
+}
+途中の計算過程は\ref{eq-doshutsu}章に記載します。
+
+\subsection{直交座標$\alpha\beta$軸を$dq$変換により磁石の位相に合わせる}
+$\alpha\beta$変換によってブラシレスDCモーターの回路方程式を3相から2相に変換できました。
+しかし$\alpha\beta$変換の時点ではモーターの回転座標はU相の位置となっており、実際の磁石の位置に合わせた直交座標になっていません。
+そこで、$\alpha\beta$軸に式(\ref{dq-cv})のdq変換を掛けることで図(\ref{dq-axis})に示すように、モーターの磁石位置を基準とした直交座標に変換します。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=8cm]{figures/dq-axis-crop.pdf}
+    \end{center}
+    \caption{$αβ$座標を磁石位置を基準としたdq座標へ回転}
+    \label{dq-axis}
+\end{figure}
+
+{\large
+\begin{align}
+    \begin{bmatrix}
+        d \\
+        q
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        \alpha \\
+        \beta
+    \end{bmatrix}
+    \label{dq-cv}
+\end{align}
+}
+
+変換により、式(\ref{ab-eq})は式(\ref{dq-eq})となります。途中の計算過程は\ref{eq-doshutsu}章に記載します。
+{\large
+\begin{align}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        R+pL' & -\omega_{r}L' \\
+        \omega_{r}L' & R+pL'
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{d} \\
+        i_{q}
+    \end{bmatrix}
+    + \omega_{r}\psi'
+    \begin{bmatrix}
+        0 \\
+        1
+    \end{bmatrix}
+    \label{dq-eq}
+\end{align}
+}
+なお、SPMSM型では、d軸、q軸のインダクンス成分$L_{d},L_{q}$はどちらも$L'=L-M$となります。
+
+式(\ref{dq-eq})の電流$i_{q}$がモーターの磁石に対して直角方向のトルクを発生する電流で、ブラシ付きモーターの駆動電流に相当します。
+これにトルク定数$K_{t}=P_{n}\psi$を掛けると式(\ref{trq})のトルク式となります。
+{\large
+\begin{equation}\label{trq}
+T=P_{n}\{\psi i_{q}+(L_{d}-L_{q})i_{d}i_{q}\} = P_{n}\psi i_{q} = K_{t}i_{q}
+\end{equation}
+$P_{n}:モーター極対数、\psi:モーター鎖交磁束[wb]$
+}
+\subsection{3相電圧の$dq$変換}
+ブラシレスDCモーターをdq変換により2相モデル化しましたが、マイコン上で走るプログラムからモーター実機の入力は
+PWMによる3相電圧です。そこでこれらもdq変換を掛けて、$v_{u},v_{v},v_{w} → v_{d},v_{q}$へ変換します。
+具体的には、$v_{u},v_{v},v_{w}$電圧に左側から順番に$\alpha\beta$変換、$dq$変換を掛けていきます。
+{\large
+\begin{align}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    &=
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \sqrt{\frac{2}{3}}
+    \begin{bmatrix}
+        cos0 & cos(\frac{2}{3} \pi) & cos(-\frac{2}{3} \pi) \\
+        sin0 & sin(\frac{2}{3} \pi) & sin(-\frac{2}{3} \pi)
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{u} \\
+        v_{v} \\
+        v_{w}
+    \end{bmatrix}
+    \notag \\
+    &=
+    \sqrt{\frac{2}{3}}
+    \begin{bmatrix}
+        cos\theta_{r} & cos\theta_{r} cos(\frac{2}{3}\pi) + sin\theta_{r} sin(\frac{2}{3}\pi) & cos\theta_{r} cos(-\frac{2}{3}\pi) + sin\theta_{r} sin(-\frac{2}{3}\pi) \\
+        -sin\theta_{r} & -sin\theta_{r} cos(\frac{2}{3}\pi) + cos\theta_{r} sin(\frac{2}{3}\pi) & -sin\theta_{r} cos(-\frac{2}{3}\pi) + cos\theta_{r} sin(-\frac{2}{3}\pi)
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{u} \\
+        v_{v} \\
+        v_{w}
+    \end{bmatrix}
+    \notag \\
+    &=
+    \sqrt{\frac{2}{3}}
+    \begin{bmatrix}
+        cos\theta_{r} & cos(\theta_{r} - \frac{2}{3}\pi) & cos(\theta_{r} + \frac{2}{3}\pi) \\
+        -sin\theta_{r} & -sin(\theta_{r} - \frac{2}{3}\pi) & -sin(\theta_{r} + \frac{2}{3}\pi)
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{u} \\
+        v_{v} \\
+        v_{w}
+    \end{bmatrix}
+    \label{uvw-dq}
+\end{align}
+}
+
+SIMULINKでのモデリングに向けて、ここまでの結果を図(\ref{dq-elec})に示します。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=18cm]{figures/dq-elec-crop.pdf}
+    \end{center}
+    \caption{$dq$座標系で表現したブラシレスDCモーター回路モデル}
+    \label{dq-elec}
+\end{figure}
+
+ここで、$v_{u}、v_{v}、v_{w}$[v]はマイコンから入力されるUVW相指令電圧、$v_{d}、v_{q}$[v]はモーター側でdq軸に割当てられる指令電圧、
+$L_{d}、L_{q}$[H]はdqに割当てられるモーターインダクタンス、$\psi$[wb]はモーター磁束、R[$\Omega$]抵抗、T[Nm]トルク、$P_{n}$モーター極対数、
+$\omega$[rad]角速度、となります。
+\newpage
+\subsection{SIMULINKによるモデリング}
+$dq$変換により2相に変換したブラシレスDCモータを、図\ref{simulink-model}に示すようにSIMULINKでモデリングします。
+
+\begin{figure}[htbp!]
+\begin{center}
+\includegraphics[width=18cm]{figures/simulink-model-trimed.pdf}
+\end{center}
+\caption{SIMULINKによるBLDCモデル}
+\label{simulink-model}
+\end{figure}
+
+また、図(\ref{dq-model})に$dq$変換のモデル、および図(\ref{elec-model})に回路方程式のモデルを示します。
+\begin{figure}[htbp!]
+\begin{center}
+\includegraphics[width=17cm]{figures/dq-model-trimed.pdf}
+\end{center}
+\caption{SIMULINKによるdq変換部のモデル}
+\label{dq-model}
+\end{figure}
+
+\newpage
+\begin{figure}[htbp!]
+\begin{center}
+\includegraphics[width=18cm]{figures/elec-model-trimed.pdf}
+\end{center}
+\caption{SIMULINKによるモーター回路モデル}
+\label{elec-model}
+\end{figure}
+
+\paragraph{マイコン側PWMDuty取得部}\mbox{}\\
+\begin{figure}[htbp!]
+\begin{center}
+    \includegraphics[width=2cm]{figures/getpwm-crop.pdf}
+\end{center}
+\caption{PWMデューティ取得:GetPWM}
+\label{getpwm}
+\end{figure}
+{\small
+\begin{alltt}
+function [Vu,Vv,Vw] = GetPWM()
+    //dll関数をコールのため外部関数として宣言
+    coder.extrinsic('MatGetBLDC_PWM_U');
+    coder.extrinsic('MatGetBLDC_PWM_V');
+    coder.extrinsic('MatGetBLDC_PWM_W');
+    //変数初期化
+    Vu = 0.0;
+    Vv = 0.0;
+    Vw = 0.0;
+    Vu = MatGetBLDC_PWM_U();
+    Vv = MatGetBLDC_PWM_V();
+    Vw = MatGetBLDC_PWM_W();
+end
+\end{alltt}
+}
+\newpage
+\paragraph{センサー値をマイコン側へ出力部}\mbox{}\\
+\begin{figure}[htbp!]
+\begin{center}
+    \includegraphics[width=2cm]{figures/setbldcdata-crop.pdf}
+\end{center}
+\caption{センサ値の出力と割込みイベントの発行:SetBLDCData}
+\label{setbldcdata}
+\end{figure}
+{\small
+\begin{alltt}
+function SetBLDCData(theta, Ve, Iu, Iw, omega)
+    //dll関数をコールのため外部関数として宣言
+    coder.extrinsic('MatSetBLDCData');
+    coder.extrinsic('MatReqInt_BLDC');
+    //センサー値を共有メモリへ記録
+    MatSetBLDCData(theta, Ve, Iu, Iw, omega);
+    //qemu側へ割込みイベント発行
+    MatReqInt_BLDC();
+end
+\end{alltt}
+}
+
+\paragraph{BLDCパラメータの設定とプロセス間通信用DLLファイルの読込み用Mファイル}\mbox{}\\
+SIMULINKモデルでのパラメーターを表(\ref{bldcprm})に示します。また以下パラメータの設定とQEMUとのプロセス間通信を初期化するためのmファイル(init\_bldc.m)を記載します。このmファイルは予めシミュレーション前に実行しておきます。
+\begin{table}[htbp!]
+\centering
+\caption{ブラシレスDCモーターのパラメータ一覧}
+\label{bldcprm}
+\begin{tabular}{|l|l|l|}
+\hline
+\multicolumn{1}{|c|}{変数名} & \multicolumn{1}{c|}{内容} & \multicolumn{1}{c|}{数値} \\ \hline
+R                         & モーター回路抵抗(dq変換後モデル)      & 0.453[$\Omega$]            \\ \hline
+Ld                        & d軸インダクタンス               & 0.0009447{[}H{]}        \\ \hline
+Lq                        & q軸インダクタンス               & 0.0009447{[}H{]}        \\ \hline
+qsi                       & モーター磁束M                 & 0.006198{[}Wb{]}        \\ \hline
+P                         & モーター極対数                 & 7                       \\ \hline
+J                         & モーター慣性モーメント(予測値)        & 0.00025{[}kgm2{]}        \\ \hline
+D                         & モーター粘性摩擦係数(予測値)         & 0.00075{[}Nm・s/rad{]}    \\ \hline
+V                         & インバーター電圧                & 24{[}V{]}               \\ \hline
+\end{tabular}
+\end{table}
+\newpage
+\subparagraph{<init\_bldc.m>}
+{\small
+\begin{alltt}
+//モーターパラメーター変数の設定
+R = 0.453;
+Ld = 0.0009447;
+Lq = 0.0009447;
+qsi = 0.006198;
+P = 7;
+J = 0.0002;
+D = 0.0006;
+V = 24;
+//QEMUとのプロセス間通信初期化
+result = MatHandleInit();　//共有メモリ、イベント通信の初期化
+MatSetBLDCData(0,0,0,0,0); //センサ値の初期化
+//プロセス間通信用DLLファイルの読込み
+function  result = MatHandleInit()
+    ret = 0;
+    loadlibrary(Matlab_dll','matlab_dll.h')
+    calllib('Matlab_dll','MatlabHandleInit');
+    result = ret;
+end
+\end{alltt}
+}
+\paragraph{シミュレーションサンプリング時間の設定}\mbox{}\\
+また、シミュレーションサンプリング時間はマイコン側制御プログラムに合わせて100[$\mu s$]としました。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=15cm]{figures/sampletime-crop.pdf}
+    \end{center}
+\caption{シミュレーションサンプリング時間の設定}
+\label{sampling}
+\end{figure}
+
+\newpage
+\subsection{$\alpha \beta$変換および$dq$変換の計算過程}
+\label{eq-doshutsu}
+\paragraph{$\alpha\beta$変換途中過程}\mbox{}\\
+事前準備として式(\ref{SPMSM})を行列形式に置き直します。
+\begin{fleqn}[8pt]
+{\large
+\begin{align}
+    \begin{bmatrix}
+        v_{u} \\
+        v_{v} \\
+    v_{w}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        R+pL & pM & pM \\
+        pM & R+pL & pM \\
+    pM & pM & R+pL
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{u} \\
+        i_{v} \\
+    i_{w}
+    \end{bmatrix}
+    + \omega_{r}\psi
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        -sin(\theta_{r} - \frac{2}{3}\pi) \\
+    -sin(\theta_{r} + \frac{2}{3}\pi
+    \end{bmatrix}
+    \label{SPMSM-mat}
+\end{align}
+}
+
+式(\ref{SPMSM-mat})の左側から変換行列式(\ref{ab-cv})を掛けていきます。
+{\large
+\begin{align*}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    = \sqrt\frac{2}{3}
+    \begin{bmatrix}
+        1 & -\frac{1}{2} & -\frac{1}{2} \\
+        0 & \frac{\sqrt{3}}{2} & -\frac{\sqrt{3}}{2}
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{u} \\
+        v_{v} \\
+        v_{w}
+    \end{bmatrix}
+    &= \sqrt\frac{2}{3}
+    \begin{bmatrix}
+        1 & -\frac{1}{2} & -\frac{1}{2} \\
+        0 & \frac{\sqrt{3}}{2} & -\frac{\sqrt{3}}{2}
+    \end{bmatrix}
+    \begin{bmatrix}
+        R+pL & pM & pM \\
+        pM & R+pL & pM \\
+        pM & pM & R+pL
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{u} \\
+        i_{v} \\
+        i_{w}
+    \end{bmatrix}
+    \\
+    &+ \omega_{r}\psi
+    \sqrt\frac{2}{3}
+    \begin{bmatrix}
+        1 & -\frac{1}{2} & -\frac{1}{2} \\
+        0 & \frac{\sqrt{3}}{2} & -\frac{\sqrt{3}}{2}
+    \end{bmatrix}
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        -sin(\theta_{r} - \frac{2}{3}\pi) \\
+        -sin(\theta_{r} + \frac{2}{3}\pi
+    \end{bmatrix}
+\end{align*}
+
+\begin{align*}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    &= \sqrt\frac{2}{3}
+    \begin{bmatrix}
+        R+pL-pM & -\frac{1}{2}R-\frac{1}{2}pL+\frac{1}{2}pM & -\frac{1}{2}R-\frac{1}{2}pL+\frac{1}{2}pM \\
+        0 & -\frac{\sqrt{3}}{2}R + \frac{\sqrt{3}}{2}pL - \frac{\sqrt{3}}{2}pM & -\frac{\sqrt{3}}{2}R - \frac{\sqrt{3}}{2}pL + \frac{\sqrt{3}}{2}pM
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{u} \\
+        i_{v} \\
+        i_{w}
+    \end{bmatrix}
+    \\
+    &+ \omega_{r}\psi\sqrt\frac{2}{3}
+    \begin{bmatrix}
+        -sin\theta_{r} + \frac{1}{2}(sin\theta_{r}cos(\frac{2}{3}\pi) - cos\theta_{r}sin(\frac{2}{3}\pi)) + \frac{1}{2}(sin\theta_{r}cos(-\frac{2}{3}\pi) - cos\theta_{r}sin(-\frac{2}{3}\pi)) \\
+        0 - \frac{\sqrt{3}}{2}(sin\theta_{r}cos(\frac{2}{3}\pi) - cos\theta_{r}sin(\frac{2}{3}\pi)) + \frac{\sqrt{3}}{2}(sin\theta_{r}cos(-\frac{2}{3}\pi) - cos\theta_{r}sin(-\frac{2}{3}\pi))
+    \end{bmatrix}
+\end{align*}
+
+\begin{align*}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    &= \sqrt\frac{2}{3}
+    \begin{bmatrix}
+        R(i_{u} - \frac{1}{2}i_{v} - \frac{1}{2}i_{w}) + p(L-M)(i_{u} - \frac{1}{2}i_{v} - \frac{1}{2}i_{w}) \\
+        R(0i_{u} + \frac{\sqrt{3}}{2}i_{v} - \frac{\sqrt{3}}{2}i_{w}) + p(L-M)(0i_{u} + \frac{\sqrt{3}}{2}i_{v} - \frac{\sqrt{3}}{2}i_{w})
+    \end{bmatrix}
+    \\
+    &+ \omega_{r}\psi\sqrt\frac{2}{3}
+    \begin{bmatrix}
+        -sin\theta_{r} - \frac{1}{4}sin\theta_{r} - \frac{\sqrt{3}}{4}cos\theta_{r} - \frac{1}{4}sin\theta_{r} + \frac{\sqrt{3}}{4}cos\theta_{r} \\
+        \frac{\sqrt{3}}{4}sin\theta_{r} + \frac{3}{4}cos\theta_{r} - \frac{\sqrt{3}}{4}sin\theta_{r} + \frac{3}{4}cos\theta_{r}
+    \end{bmatrix}
+\end{align*}
+
+\begin{align*}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    &= \sqrt\frac{2}{3}
+    \begin{bmatrix}
+        R+p(L-M) & 0 \\
+        0 & R+p(L-M)
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{u} - \frac{1}{2}i_{v} - \frac{1}{2}i_{w} \\
+        0i_{u} + \frac{\sqrt{3}}{2}i_{v} - \frac{\sqrt{3}}{2}i_{w}
+    \end{bmatrix}
+    + \omega_{r}\psi\sqrt\frac{2}{3}
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        cos\theta_{r}
+    \end{bmatrix}
+\end{align*}
+
+\begin{align*}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    &=
+    \begin{bmatrix}
+        R+p(L-M) & 0 \\
+        0 & R+p(L-M)
+    \end{bmatrix}
+    \sqrt\frac{2}{3}
+    \begin{bmatrix}
+        1 & -\frac{1}{2} & -\frac{1}{2} \\
+        0 & \frac{\sqrt{3}}{2} & -\frac{\sqrt{3}}{2}
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{u} \\
+        i_{v} \\
+        i_{w}
+    \end{bmatrix}
+    + \omega_{r}\psi\sqrt\frac{2}{3}
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        cos\theta_{r}
+    \end{bmatrix}
+\end{align*}
+}
+\end{fleqn}
+
+上式右辺の$\sqrt{\frac{2}{3}}$〜$i_{u},i_{v},i_{w}$までの式は電流iの$\alpha\beta$変換となります。
+併せて、$L' = L-M$、$\psi'=\sqrt{\frac{2}{3}}\psi$とおいて整理すると以下式(\ref{ab-eq})となります。
+
+{\large
+\begin{align*}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        R+pL' & 0 \\
+        0 & R+pL'
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{\alpha} \\
+        i_{\beta}
+    \end{bmatrix}
+    + \omega_{r}\psi'
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        cos\theta_{r}
+    \end{bmatrix}
+\end{align*}
+}
+
+\newpage
+\paragraph{$dq$変換途中過程}\mbox{}\\
+事前準備として式(\ref{ab-eq})を以下式(\ref{ab-sep})のように変更します。
+\begin{fleqn}[8pt]
+{\large
+\begin{align}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        R & 0 \\
+        0 & R
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{\alpha} \\
+        i_{\beta}
+    \end{bmatrix}
+    +
+    \begin{bmatrix}
+        pL' & 0 \\
+        0 & pL'
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{\alpha} \\
+        i_{\beta}
+    \end{bmatrix}
+    + \omega_{r}\psi'
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        cos\theta_{r}
+    \end{bmatrix}
+    \label{ab-sep}
+\end{align}
+}
+\end{fleqn}
+
+式(\ref{ab-sep})の左側から式(\ref{dq-cv})を掛けていきます。単純に考えると、以下の式(\ref{dq-fail})となりますが、
+定数Rの行列に対してインダクタンス$pL'$を含む行列は微分係数$p$があるため、計算順序を守らないと結果が変わってしまいます。
+そこで、式(\ref{dq-proc})の形に変更して計算を進めます。
+\begin{fleqn}[8pt]
+{\large
+\begin{align}
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    &=
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        R & 0 \\
+        0 & R
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{\alpha} \\
+        i_{\beta}
+    \end{bmatrix}
+    +
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        pL' & 0 \\
+        0 & pL'
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{\alpha} \\
+        i_{\beta}
+    \end{bmatrix}
+    \notag \\
+    &+ \omega_{r}\psi'
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        cos\theta_{r}
+    \end{bmatrix}
+    \label{dq-fail}
+\end{align}
+
+\begin{align}
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{\alpha} \\
+        v_{\beta}
+    \end{bmatrix}
+    &=
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        R & 0 \\
+        0 & R
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{\alpha} \\
+        i_{\beta}
+    \end{bmatrix}
+    \notag \\
+    &+
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        pL' & 0 \\
+        0 & pL'
+    \end{bmatrix}
+    \textcolor{red}{
+    \begin{bmatrix}
+        cos\theta_{r} & -sin\theta_{r} \\
+        sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}}
+    \textcolor{blue}{
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}}
+    \begin{bmatrix}
+        i_{\alpha} \\
+        i_{\beta}
+    \end{bmatrix}
+    \notag \\
+    &+ \omega_{r}\psi'
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        cos\theta_{r}
+    \end{bmatrix}
+    \label{dq-proc}
+\end{align}
+}
+\end{fleqn}
+式(\ref{dq-proc})の\textcolor{red}{赤の行列}は\textcolor{blue}{青のdq変換行列}の逆行列のため、
+両者は単位行列となり、式(\ref{dq-proc})の大きさには影響しません。また、\textcolor{blue}{青のdq変換行列}
+が隣の$i_{\alpha}、i_{\beta}$に掛かることで、この部分が$id、iq$となります。なお、抵抗Rの項は定数行列のため変換行列と入れ替えて置き直すことが出来ます。
+その結果以下の形になります。
+\begin{fleqn}[8pt]
+{\large
+\begin{align*}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        R & 0 \\
+        0 & R
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{d} \\
+        i_{q}
+    \end{bmatrix}
+    &+
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        pL' & 0 \\
+        0 & pL'
+    \end{bmatrix}
+    \textcolor{red}{
+    \begin{bmatrix}
+        cos\theta_{r} & -sin\theta_{r} \\
+        sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}}
+    \begin{bmatrix}
+        i_{d} \\
+        i_{q}
+    \end{bmatrix}
+    \\
+    &+ \omega_{r}\psi'
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        cos\theta_{r}
+    \end{bmatrix}
+\end{align*}
+}
+計算が長くなるため、まずインダクタンス行列の変換について記載します。
+{\large
+\begin{align*}
+    &\begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        pL' & 0 \\
+        0 & pL'
+    \end{bmatrix}
+    \textcolor{red}{
+    \begin{bmatrix}
+        cos\theta_{r} & -sin\theta_{r} \\
+        sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}}
+    \begin{bmatrix}
+        i_{d} \\
+        i_{q}
+    \end{bmatrix}
+    \\
+    &=
+    \begin{bmatrix}
+    cos\theta_{r}pL'cos\theta_{r}i_{d} + sin\theta_{r}pL'sin\theta_{r}i_{d} - cos\theta_{r}pL'sin\theta_{r}i_{q} + sin\theta_{r}pL'cos\theta_{r}i_{q} \\
+    -sin\theta_{r}pL'cos\theta_{r}i_{d} + cos\theta_{r}pL'sin\theta_{r}i_{d} + sin\theta_{r}pL'sin\theta_{r}i_{q} + cos\theta_{r}pL'cos\theta_{r}i_{q}
+    \end{bmatrix}
+\end{align*}
+}
+\end{fleqn}
+$pL'sin,pL'cos$の項は合成関数と積の微分公式を用いて計算します
+\begin{fleqn}[8pt]
+{\large
+\begin{align*}
+    =
+    \begin{bmatrix}
+    (1行目)cos\theta_{r}(-\omega_{r} L'sin\theta_{r}i_{d} + cos\theta_{r}pL'i_{d}) + sin\theta_{r}(\omega_{r} L'cos\theta_{r}i_{d} + sin\theta_{r}pL'i_{id}) \\
+    \;\qquad \qquad -cos\theta_{r}(\omega_{r} L'cos\theta_{r}i_{q}+sin\theta_{r}pL'i_{q}) + sin\theta_{r}(-\omega_{r} L'sin\theta_{r}i_{q} + cos\theta_{r}pL'i_{q}) \\
+    (2行目)-sin\theta_{r}(-\omega_{r} L'cos\theta_{r}i_{d} + 'cos\theta_{r}pL'i_{d}) + cos\theta_{r}(\omega_{r} L'cos\theta_{r}i_{d} + sin\theta_{r}pL'i_{d}) \\
+    \;\qquad \qquad+ sin\theta_{r}(\omega_{r} L'cos\theta_{r}i_{q} + pL'sin\theta_{r}i_{q}) + cos\theta_{r}(-\omega_{r} L'sin\theta_{r}i_{q} + pL'cos\theta_{r}i_{q})
+    \end{bmatrix}
+\end{align*}
+\begin{align*}
+    \\
+    =
+    \begin{bmatrix}
+    (cos^{2}\theta_{r} + sin^{2}\theta_{r})pL'i_{id} - \omega_{r} L(cos^{2}\theta_{r} + sin^{2}\theta_{r})i_{q} \\
+    \omega_{r} L(cos^{2}\theta_{r} + sin^{2}\theta_{r})i_{id} + (cos^{2}\theta_{r} + sin^{2}\theta_{r})pL'i_{q}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+    pL' & - \omega_{r} L \\
+    \omega_{r} L & pL'
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{d} \\
+        i_{q}
+    \end{bmatrix}
+\end{align*}
+}
+これにより抵抗Rの項も含めて次式の形となります。
+{\large
+\begin{align*}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        R & 0 \\
+        0 & R
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{d} \\
+        i_{q}
+    \end{bmatrix}
+    +
+    \begin{bmatrix}
+    pL' & - \omega_{r} L \\
+    \omega_{r} L & pL'
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{d} \\
+        i_{q}
+    \end{bmatrix}
+    + \omega_{r}\psi'
+    \begin{bmatrix}
+        cos\theta_{r} & sin\theta_{r} \\
+        -sin\theta_{r} & cos\theta_{r}
+    \end{bmatrix}
+    \begin{bmatrix}
+        -sin\theta_{r} \\
+        cos\theta_{r}
+    \end{bmatrix}
+\end{align*}
+}
+逆起電力項を計算していきます。
+{\large
+\begin{align*}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+    R+pL' & - \omega_{r} L \\
+    \omega_{r} L & R+pL'
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{d} \\
+        i_{q}
+    \end{bmatrix}
+    + \omega_{r}\psi'
+    \begin{bmatrix}
+        -sin\theta_{r}cos\theta_{r} + sin\theta_{r}cos\theta_{r} \\
+        sin^{2}\theta_{r} + cos^{2}\theta_{r}
+    \end{bmatrix}
+\end{align*}
+}
+\end{fleqn}
+以上により、式(\ref{dq-eq})の形となります。
+{\large
+\begin{align*}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        R+pL' & -\omega_{r}L' \\
+        \omega_{r}L' & R+pL'
+    \end{bmatrix}
+    \begin{bmatrix}
+        i_{d} \\
+        i_{q}
+    \end{bmatrix}
+    + \omega_{r}\psi'
+    \begin{bmatrix}
+        0 \\
+        1
+    \end{bmatrix}
+\end{align*}
+}

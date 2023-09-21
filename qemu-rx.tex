@@ -1,0 +1,1002 @@
+\documentclass[uplatex,a4paper,twoside,10pt]{jsarticle}
+\input{setting}
+\begin{document}
+\newpage
+\section{QEMUによるRX62Tマイコンエミュレータの作成}
+SIMULINKでブラシレスDCモーターをモデル化したのに対して、RX62TのマイコンのエミュレーターをQEMUで作成します。
+QEMUといえばARM系マイコンのエミュレートが有名ですが、バージョン5.1よりRenesas RXとしてRX62Nが追加されています。
+これをベースに今回のベクトル制御に必要なRX62Tの機能を追加します。
+\subsection{QEMUについて}
+QEMUは、x86やPowerPC、ARMなどの様々なCPUアーキテクチャーの命令をエミュレートできるオープンソースのエミュレーターです。
+ISS(命令セットシミュレーター)の意味合いが強いですが、タイマやIO、シリアル通信、ADなどCPUの周辺機能もエミュレート可能です。そのため対応モデルにはCPUだけでなく基板そのもののモデルも出てくることもあります。またソースコードが公開されておりカスタマイズ可能なためCPUが対応されていれば、SOC(System-On-a-Chip)のような専用マイコンの場合であっても、後から機能を追加して専用エミュレーターを構築することも可能です。
+「キューイーエムユー」と読みますが、「キューエム」と呼ぶ場合もあるようです。
+様々なコンピューターに対応したQEMUですが、組込みの領域では前述のようにARMマイコンのエミュレートが有名で、ここ最近はSTM32シリーズのCortex-MをベースとするSTM32シリーズにも一部対応されてきています。今回はバージョン6.0.0を使用していますが、原稿執筆時点での最新版は7.0.0となっています。
+
+\subsection{QEMUの構成}
+QEMUのディレクトリ構成の概要を図(\ref{qemu-directory})に示します。
+マイコンのレジスタ機能は主にhwディレクトリ以下のファイルにて管理されており、
+タイマやポートといった機能毎のフォルダとarmやrxといったマイコン機能を取りまとめるフォルダに分けられています。
+\begin{figure}[htbp!]
+\begin{center}
+\includegraphics[width=12.5cm]{figures/qemu-directory-crop.pdf}
+\end{center}
+\caption{qemuのディレクトリ構成}
+\label{qemu-directory}
+\end{figure}
+
+\subsection{QEMUの開発環境とmake}
+QEMUはgcc環境でmake(ビルド)することができます。QEMUのサイトから必要な情報を得ることが可能です。筆者はQEMUのwiki\footnote{https://wiki.qemu.org/Hosts/W32　→ "Building QEMU for W64"項を参照}を参考にMSYS2の環境でmakeしました。以下にmakeにあたって必要な環境準備とコマンドを記載します。
+\subsubsection{開発環境の準備}
+\paragraph{MSYS2の追加パッケージ}
+\begin{alltt}
+Msys2のターミナル上で以下を順に実行。
+pacman -Syu    →　パッケージを最新に更新
+pacman -Su     → 残パッケージを更新(必要に応じて)
+pacman -S base-devel mingw-w64-x86\_64-toolchain git python ninja   → git、 python、 ninjaを　インストール
+pacman -S mingw-w64-x86_64-glib2 mingw64/mingw-w64-x86\_64-gtk3 mingw64/mingw-w64-x86\_64-SDL2
+python-setuptools → glib2、gtk3、SDL2　をインストール
+\end{alltt}
+\paragraph{ソースコードの準備}\mbox{}\\
+サイトでは\verb*|git clone https://www.gitlab.com/qemu/qemu|としてgitクローンする方法を記載していますが、普通に"DOWNLOAD"ページから落としてもらう方法でも構いません。(筆者はこの方法としました)
+
+\subsubsection{make方法}
+makeもQEMUのサイトに説明があり、以下のようにコマンド入力することでmakeできます。(QEMU-6.0.0で実行した場合)
+\begin{alltt}
+cd qemu-6.0.0
+./configure --enable-gtk --enable-sdl
+make
+\end{alltt}
+ですが、この方法だとRX以外のエミュレーター含め全体をmakeしてしまうため時間が掛かってしまいます。そこで、RXエミュレーターに限定するために以下のようにコマンドを入力します。
+\begin{alltt}
+cd qemu-6.0.0
+mkdir build
+cd build
+../configure \textcolor{blue}{--prefix=/c/git_repo/qemu-6.0.0/rx-bin} \textcolor{red}{--target-list=rx-softmmu}
+--enable-gtk --enable-sdl--enable-hax--disable-strip --enable-debug
+make
+make install
+\textcolor{blue}{※青:バイナリの保存先を指定}
+\textcolor{red}{※赤:make対象をRXエミュレーターに限定}
+\end{alltt}
+
+\newpage
+\subsection{QEMUへのRX62T機能追加}
+QEMU-6.0.0でのRXエミュレーターの状況を表\ref{rx62n}に示します。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{QEMUの既存RXエミュレータ対応状況}
+\label{rx62n}
+\begin{tabular}{|l|l|l|l|l|}
+\hline
+\multicolumn{1}{|c|}{機能} &
+  \multicolumn{1}{c|}{機能} &
+  割込み &
+  プロセス間通信 &
+  備考 \\ \hline
+\begin{tabular}[c]{@{}l@{}}RX62N\\ (R5F562N7)\end{tabular} &
+  命令エミュレート &
+  - &
+  無し &
+  \begin{tabular}[c]{@{}l@{}}RAM:64KB\\ ROMフラッシュ:384KB\\ データフラッシュ:32KB\end{tabular} \\ \hline
+\begin{tabular}[c]{@{}l@{}}RX62N\\ (R5F562N8)\end{tabular} &
+  命令エミュレート &
+  - &
+  無し &
+  \begin{tabular}[c]{@{}l@{}}RAM:96KB\\ ROMフラッシュ:512KB\\ データフラッシュ:32KB\end{tabular} \\ \hline
+ICU &
+  割込み管理 &
+  - &
+  無し &
+   \\ \hline
+TMR &
+  8bitタイマ &
+  タイマ &
+  無し &
+   \\ \hline
+CMT &
+  コンペアマッチタイマ &
+  タイマ &
+  無し &
+   \\ \hline
+SCI &
+  シリアルIF &
+  \begin{tabular}[c]{@{}l@{}}受信エラー\\ 受信データフル\\ 送信データエンプティ\\ 送信終了\end{tabular} &
+  無し &
+  SCI0のみ対応 \\ \hline
+\end{tabular}
+\end{table}
+}
+
+今回のブラシレスDCモーターの制御開発にあたり、MTUタイマ、電流、電圧計測のためのADセンサ、および評価用のSWポートが必要となりますので、
+これらを付加してRX62Tエミュレーターとして追加登録します。表(\ref{rx-register})に追加した機能を示します。
+{\small
+% Please add the following required packages to your document preamble:
+% \usepackage[table,xcdraw]{xcolor}
+% If you use beamer only pass "xcolor=table" option, i.e. \documentclass[xcolor=table]{beamer}
+\begin{table}[htbp!]
+\centering
+\caption{RX62T用に追加した機能一覧(\textcolor{red}{赤字以降})}
+\label{rx-register}
+\begin{tabular}{|l|l|l|l|}
+\hline
+\multicolumn{1}{|c|}{機能} &
+  \multicolumn{1}{c|}{機能} &
+  ファイルパス(qemu以下) &
+  備考 \\ \hline
+{\color[HTML]{FE0000} \begin{tabular}[c]{@{}l@{}}RX62T\\ (R5F562TADDFH)\end{tabular}} &
+  {\color[HTML]{FE0000} CPU命令エミュレート} &
+  {\color[HTML]{FE0000} \begin{tabular}[c]{@{}l@{}}hw/rx/rx62t.c\\ include/hw/rx/rx62t.h\end{tabular}} &
+  {\color[HTML]{FE0000} \begin{tabular}[c]{@{}l@{}}既存RX62Nから変更\\ RAM:16KB\\ ROMフラッシュ:256KB\\ データフラッシュ:32KB\end{tabular}} \\ \hline
+ICU &
+  割込み管理 &
+  {\color[HTML]{000000} \begin{tabular}[c]{@{}l@{}}hw/intc/rx\_icu.c\\ include/hw/intc/rx\_icu.h\end{tabular}} &
+  - \\ \hline
+TMR &
+  8bitタイマ &
+  {\color[HTML]{000000} \begin{tabular}[c]{@{}l@{}}hw/timer/renesas\_tmr.c\\ include/hw/timer/renesas\_tmr.h\end{tabular}} &
+  - \\ \hline
+CMT &
+  コンペアマッチタイマ &
+  {\color[HTML]{000000} \begin{tabular}[c]{@{}l@{}}hw/timer/renesas\_cmt.c\\ include/hw/timer/renesas\_cmt.h\end{tabular}} &
+  - \\ \hline
+SCI &
+  シリアルIF &
+  {\color[HTML]{000000} \begin{tabular}[c]{@{}l@{}}hw/char/renesas\_sci.c\\ include/hw/char/renesas\_sci.h\end{tabular}} &
+  - \\ \hline
+{\color[HTML]{FE0000} MTU3} &
+  {\color[HTML]{FE0000} タイマ} &
+  {\color[HTML]{FE0000} \begin{tabular}[c]{@{}l@{}}hw/timer/renesas\_mtu0～.c\\ include/hw/timer/renesas\_mtu0～.h\end{tabular}} &
+  {\color[HTML]{FE0000} MTU0～4を追加} \\ \hline
+{\color[HTML]{FE0000} PORT} &
+  {\color[HTML]{FE0000} ポート制御} &
+  {\color[HTML]{FE0000} \begin{tabular}[c]{@{}l@{}}hw/gpio/rx\_port.c\\ include/hw/gpio/rx\_port.h\end{tabular}} &
+  {\color[HTML]{FE0000} SW機能} \\ \hline
+{\color[HTML]{FE0000} S12AD} &
+  {\color[HTML]{FE0000} ADセンサ} &
+  {\color[HTML]{FE0000} \begin{tabular}[c]{@{}l@{}}hw/adc/renesas\_s12ad.c\\ include/hw/adc/renesas\_s12ad.h\end{tabular}} &
+  {\color[HTML]{FE0000} 電流、電圧センサ} \\ \hline
+{\color[HTML]{FE0000} KEYTEST(独自)} &
+  {\color[HTML]{FE0000} qemuデバッグ用} &
+  {\color[HTML]{FE0000} \begin{tabular}[c]{@{}l@{}}hw/timer/rx62t\_keytest.c\\ include/hw/timer/rx62t\_keytest.h\end{tabular}} &
+  {\color[HTML]{FE0000} キー入力とprintf} \\ \hline
+\end{tabular}
+\end{table}
+}
+
+\newpage
+\subsubsection{機能追加}
+RX62T機能の追加にあたって、既存のRX62Nの構成を参考にしました。QEMUへ機能を追加する際は、QEMU側の作法に沿って進める必要があります。追加の詳細過程を紐解くのは大変なためここでは省略しますが、
+表(\ref{add-func})の手続きを取れば追加可能です。実際は既存の機能ファイルを参照しながら真似ていく方法で追加できました。
+\begin{table}[htbp!]
+{\small
+\begin{center}
+\caption{QEMUへ機能追加する際の手続き}
+\label{add-func}
+\begin{tabular}{|l|l|l|l|}
+\hline
+番号 & 作業名称              & 適用ファイル              & 備考                            \\ \hline
+1  & 追加機能のQEMUへの登録名称定義 & 機能名.h               & QEMUは登録名称で参照するため              \\ \hline
+2  & レジスタ名とオフセットアドレス定義 & 機能名.h               & レジスタアクセスは開始アドレスからのオフセットで参照のため \\ \hline
+3  & 機能レジスタ開始アドレスの設定   & 取りまとめファイル.c         & CPUマニュアル参照                    \\ \hline
+4  & 機能レジスタのサイズ設定      & 機能名.c               & レジスタマップより見積(HWマニュアル参照)        \\ \hline
+5  & レジスタリード、ライト時のふるまい & 機能名.c               &                               \\ \hline
+6  & レジスタ機能独自動作        & 機能名.c               & タイマ、割込み、その他                   \\ \hline
+7  & ビルド構成へ追加          & Kconfig、meson.build &                               \\ \hline
+\end{tabular}
+\end{center}
+}
+\end{table}
+
+QEMU内での機能の実現イメージを図(\ref{func-file})に示します。
+
+\begin{figure}[htbp!]
+\begin{center}
+\includegraphics[width=18cm]{figures/func_file-crop.pdf}
+\end{center}
+\caption{マイコンと周辺レジスタ機能の管理イメージ}
+\label{func-file}
+\end{figure}
+\begin{enumerate}
+\item ioポートやADなどの周辺機能毎にファイルを分けて管理している
+\item レジスタの管理も機能ファイルで行う
+\item それらの機能を取りまとめてQEMUに登録するファイルがある(rx62t.c)
+\item 取りまとめファイルでマイコンのアドレス空間を管理し周辺機能レジスタのベースアドレスもここで設定される
+\item レジスタの詳細アドレスは機能ファイル毎に割り振られるベースアドレスからのオフセット値で管理される
+\end{enumerate}
+
+また、RX62Tと62Nのハードウェアマニュアルを見比べてみて、アドレス空間の構成は異なりますが、モーター制御で必要となるMTUタイマや、AD、IOといった周辺機能は、
+図(\ref{func-file})の"周辺IOレジスタ"領域に収まっていることがわかります。ここをメンテすることで、RX62T用の制御プログラムを走らせることができそうです。
+以降、表(\ref{rx-register})に沿ってRX62T、MTU3タイマ、評価用KEYTEST(独自)などの追加機能について説明します。なお、ポート機能のPORT、ADセンサ機能のS12ADについては、MTU3タイマと比べて機能が簡単なため省略します。
+
+\newpage
+\subsubsection{ROM/RAM領域の設定、レジスタ機能のとりまとめRX62T取りまとめ、およびQEMUへの登録(rx62t.c/h)}
+RX62Tエミュレーター機能の取りまとめ部になります。ROM/RAM領域の設定と今回追加したタイマや、IO等の機能の取りまとめと、QEMUへの登録を行います。ベースは既存RXエミュレーターのRX62Nとなります。
+\paragraph{ROM/RAM領域の調整}\mbox{}\\
+図(\ref{ROM-RAM領域})に示すように、既存のRX62Nに対して、ROM/RAMサイズが異なりますので調整します。ROM領域については開始アドレスが異なるため、併せて変更します。
+
+\begin{figure}[htbp!]
+	\begin{center}
+		\includegraphics[width=13cm]{figures/ROM-RAM領域-crop.pdf}
+	\end{center}
+	\caption{RX62NとRX62TのROM/RAM領域の比較}
+	\label{ROM-RAM領域}
+\end{figure}
+
+{\small\begin{alltt}
+static void r5f562taddfh_class_init(ObjectClass *oc, void *data)
+\{
+    RX62TClass *rxc = RX62T_MCU_CLASS(oc);
+    rxc->ram\_size =\textcolor{red}{16 * KiB;}
+    rxc->rom\_flash_size = \textcolor{red}{256 * KiB;}
+    rxc->data\_flash_size = 32 * KiB;
+\}
+\end{alltt}}
+ROM開始位置を以下調整します。
+{\small
+\begin{alltt}
+static void rx62t_realize(DeviceState *dev, Error **errp)
+\{
+    RX62TState *s = RX62T_MCU(dev);
+    RX62TClass *rxc = RX62T_MCU_GET_CLASS(dev);
+    :
+    省略
+    :
+    /*RAM設定*/
+    memory_region_init_ram(&s->iram, OBJECT(dev), "iram",
+                           rxc->ram_size, &error_abort);
+    memory_region_add_subregion(s->sysmem, RX62T_IRAM_BASE, &s->iram);
+    /*データフラッシュ設定*/
+    memory_region_init_rom(&s->d_flash, OBJECT(dev), "flash-data",
+                           rxc->data_flash_size, &error_abort);
+    memory_region_add_subregion(s->sysmem, RX62T_DFLASH_BASE, &s->d_flash);
+    /*FLASH_ROM設定*/
+    memory_region_init_rom(&s->c_flash, OBJECT(dev), "flash-code",
+                           rxc->rom_flash_size, &error_abort);
+    memory_region_add_subregion(s->sysmem, \textcolor{red}{RX62T_CFLASH_BASE}, &s->c_flash);
+    ↑\textcolor{red}{RX62T_CFLASH_BASEを0xfffC0000->0xfffC0000に変更}
+\end{alltt}}
+
+\newpage
+\paragraph{各周辺機能の取込み}
+{\small \begin{alltt}
+static void rx62t_realize(DeviceState *dev, Error **errp)
+\{
+    RX62TState *s = RX62T_MCU(dev);
+    RX62TClass *rxc = RX62T_MCU_GET_CLASS(dev);
+    :
+    省略
+    /*RAM設定～FLASH_ROM設定...(省略)*/
+    ：
+    /*既存部*/
+     register_icu(s);
+     s->cpu.env.ack = qdev_get_gpio_in_named(DEVICE(&s->icu), "ack", 0);
+     register_tmr(s, 0);
+     register_tmr(s, 1);
+     register_cmt(s, 0);
+     register_cmt(s, 1);
+     register_sci(s, 0);
+     \textcolor{red}{/*追加周辺機能*/
+     register_mtu0(s, 0);
+     register_mtu1(s, 0);
+     register_mtu2(s, 0);
+     register_mtu34(s, 0);
+     register_s12ad(s, 0);
+     register_ioport(s, 0);
+     register_keytest(s, 0);}
+\end{alltt}}
+
+\paragraph{周辺機能の取込み詳細(MTU0タイマの場合)}
+{\small \begin{alltt}
+static void register_mtu0(RX62TState *s, int unit)
+\{
+    SysBusDevice *mtu0;
+    int i, irqbase;
+
+    /* MTU0を初期化して本エミュレートへ追加 */
+    object_initialize_child(OBJECT(s), "mtu0", &s->mtu0, TYPE_RENESAS_MTU0);
+
+    /* "input-freq"プロパティにRX62T_PCLKを適用(周辺クロック12MHz) */
+    mtu0 = SYS_BUS_DEVICE(&s->mtu0);
+    qdev_prop_set_uint64(DEVICE(mtu0), "input-freq", RX62T_PCLK);
+    sysbus_realize(mtu0, &error_abort);
+
+    /* MTU0用の割込み追加114ベクタから7個分(TGIA0~TGIF0) */
+    irqbase = RX62T_MTU0_IRQBASE;
+    for (i = 0; i < MTU0_NR_IRQ; i++) \{
+        sysbus_connect_irq(mtu0, i, s->irq[irqbase + i]);
+    \}
+
+    /* 周辺IO領域アドレス0x000C1300にMTU0を追加 */
+    sysbus_mmio_map(mtu0, 0, RX62T_MTU0BASE);
+\}
+\end{alltt}}
+\newpage
+\paragraph{周辺機能の取込み詳細(IOポートの場合)}
+{\small \begin{alltt}
+static void register_ioport(RX62TState *s, int unit)
+\{
+    SysBusDevice *ioport;
+
+    /* 初期化して本エミュレートへ追加 */
+    object_initialize_child(OBJECT(s), "ioport",
+    &s->ioport, TYPE_RENESAS_IOPORT);
+
+     /* "input-freq"プロパティにRX62T_PCLKを適用(周辺クロック12MHz) */
+    ioport = SYS_BUS_DEVICE(&s->ioport);
+    qdev_prop_set_uint64(DEVICE(ioport), "input-freq", RX62T_PCLK);
+    sysbus_realize(ioport, &error_abort);
+
+    /* ※割込は未登録としました */
+
+    /* 周辺IO領域アドレス0x0008C000にIOポートを追加 */
+    sysbus_mmio_map(ioport, 0, RX62T_IOPORTBASE);
+\}
+\end{alltt}}
+
+\subsubsection{MTUタイマ-の実装}
+RX62Tエミュレーターに追加するMTUタイマーについて記載します。今回追加したタイマーはMTU0～4となりますが、表(\ref{mtu-func})に示すように、
+タイマー毎に特殊機能を持っています。例としてMTU1、2では位相計数モードとしてタイマーカウンターをエンコーダー計測用に使用することが出来ます。
+また、MTU3、4ではタイマーカウンターをPWMの周期タイマーとして使用できます。いずれにしてもQEMU上で本来の機能まで追い込む事は出来ませんでしたので、
+簡易的な対応に留めています。
+{\small\begin{table}[htbp!]
+        \centering
+        \caption{MTU0～4の機能について}
+        \label{mtu-func}
+        \begin{tabular}{|l|c|c|c|l|l|}
+            \hline
+            名称        & \multicolumn{1}{l|}{タイマー機能} & \multicolumn{1}{l|}{位置計測機能} & \multicolumn{1}{l|}{PWM機能} & 割込み                                                                      & 備考                                                                                                    \\ \hline
+            MTU0      & ○                           & -                           & -                          & TGIA$\sim$TGID                                                           &                                                                                                       \\ \hline
+            MTU1、MTU2 & ○                           & ○                           & -                          & TGIA、TGIB                                                                & 位相計数モード簡易版                                                                                            \\ \hline
+            MTU3、MTU4     & ○                           & -                           & ○                          & \begin{tabular}[c]{@{}l@{}}各TGIA$\sim$TGID\\ TCIV4(Winイベント)\end{tabular} & \begin{tabular}[c]{@{}l@{}}・相補PWM機能簡易版\\ ・アドレスが前後するため\\ 　1ファイルに集約\\ 　(renesas\_mtu34.c/h)\end{tabular} \\ \hline
+        \end{tabular}
+\end{table}}
+
+\paragraph{レジスタ定義とモジュールの初期化}\mbox{}\\
+MTUのレジスタを追加していきます。主なレジスタ機能の追加作業として、
+\begin{enumerate}
+\item レジスタ変数の定義
+\item ベースアドレスからのオフセット設定
+\item レジスタリード機能の設定
+\item レジスタライト機能の設定
+\item タイマー機能の設定
+\item モジュールの初期化
+\end{enumerate}
+があります。特にレジスタリード、ライト機能については、後述するタイマ機能の開始、停止トリガとなるため重要です。ここではMTU0を参照しながら追加工程を説明します。
+\newpage
+\subparagraph{レジスタ定義(renesas\_mtu0.h)}
+{\small\begin{alltt}
+typedef struct RMTU0State \{
+    SysBusDevice parent_obj;
+    /* --周辺クロック-- */
+    uint64_t input_freq;
+    /*　--経過時間計算用--*/
+    int64_t div_round;
+    int64_t tick;
+
+    /* --MTU0のメモリ割当て用-- */
+    MemoryRegion memory;
+
+    /* ---レジスタ定義--- */
+    uint8_t  tcr;
+    uint8_t  tmdr1;
+    uint8_t  tiorh;
+    uint8_t  tiorl;
+    uint8_t  tier;
+    uint8_t  tsr;
+    uint32_t tcnt;
+    uint16_t tgra;
+    uint16_t tgrb;
+    uint16_t tgrc;
+    uint16_t tgrd;
+    uint16_t tgre;
+    uint16_t tgrf;
+    uint8_t  tier2;
+    uint8_t  tsr2;
+    uint8_t  tbtm;
+    /* --割込み管理用-- */
+    qemu_irq tgia;
+    qemu_irq tgib;
+    qemu_irq tgic;
+    qemu_irq tgid;
+    qemu_irq tgie;
+    qemu_irq tgif;
+    qemu_irq tciv;
+    /* --内部タイマ-管理用-- */
+    QEMUTimer timer;
+\} RMTU0State;
+\end{alltt}}
+
+\newpage
+\subparagraph{オフセットアドレスの定義(renesas\_mtu0.h)}\mbox{}\\
+MTU0のベースアドレスは定義済み(図(\ref{func-file}))なので、ここではベースからのオフセットアドレスを定義します。
+{\small\begin{alltt}
+        /* register offset address */
+        #define R_TCR   (0x00)
+        #define R_TMDR1 (0x01)
+        #define R_TIORH (0x02)
+        #define R_TIORL (0x03)
+        #define R_TIER  (0x04)
+        #define R_TSR   (0x05)
+        #define R_TCNT  (0x06)
+        #define R_TGRA  (0x08)
+        #define R_TGRB  (0x0A)
+        #define R_TGRC  (0x0C)
+        #define R_TGRD  (0x0E)
+        #define R_TGRE  (0x20)
+        #define R_TGRF  (0x22)
+        #define R_TIER2 (0x24)
+        #define R_TSR2  (0x25)
+        #define R_TBTM  (0x26)
+\end{alltt}}
+
+\subparagraph{レジスタリード機能の設定(renesas\_mtu0.c)}\mbox{}\\
+QEMUでは、QEMU上で走る実行バイナリ(ここではBLDC制御プログラム)がレジスタにアクセスした際に、それをトリガとして該当する周辺モジュールのリード/ライト用コールバック関数を呼び出す機能が有ります。
+そのためレジスタやレジスタ内のビット設定に合わせて、タイマーを走らせたり、割込みを発行することが可能です。
+ここでは、リード/ライト時に呼び出されるコールバック部を実装します。後述のライト時のコールバックと併せて、実装した関数は、
+周辺モジュール毎に割り当てられるメモリ管理構造体(MemoryRegion構造体)に登録し、モジュール初期化時にMemoryRegion設定(メモリ割当て設定)でRX62Tエミュレーターに登録します。
+{\small\begin{alltt}
+static uint64_t mtu0_read(void *opaque, hwaddr addr, unsigned size)
+\{
+    RMTU0State *mtu0 = opaque;
+    uint64_t ret;
+    switch(addr)\{
+        /* R_〇〇 レジスタへアクセスされた場合にmtu0->〇〇メンバーの値を返す */
+        case R_TCR:     ret = mtu0->tcr;    break;
+        case R_TMDR1:   ret = mtu0->tmdr1;  break;
+        case R_TIORH:   ret = mtu0->tiorh;  break;
+        case R_TIORL:   ret = mtu0->tiorl;  break;
+        case R_TIER:    ret = mtu0->tier;   break;
+        case R_TSR:     ret = mtu0->tsr;    break;
+        case R_TCNT:    ret = mtu0->tcnt;   break;
+        case R_TGRA:    ret = mtu0->tgra;   break;
+        case R_TGRB:    ret = mtu0->tgrb;   break;
+        case R_TGRC:    ret = mtu0->tgrc;   break;
+        case R_TGRD:    ret = mtu0->tgrd;   break;
+        case R_TGRE:    ret = mtu0->tgre;   break;
+        case R_TGRF:    ret = mtu0->tgrf;   break;
+        case R_TIER2:   ret = mtu0->tier2;  break;
+        case R_TSR2:    ret = mtu0->tsr2;   break;
+        case R_TBTM:    ret = mtu0->tbtm;   break;
+        default:
+        ret= 0;
+        break;
+    \}
+    switch(size)\{
+        /* データサイズの調整 */
+        case 1: ret = ret; break;
+        case 2: ret = (uint16_t)ret; break;
+        case 4: ret = (uint32_t)ret; break;
+        case 8: ret = (uint64_t)ret; break;
+        default:
+        ret= 0;
+        break;
+    \}
+    return ret;
+\}
+\end{alltt}}
+
+\subparagraph{レジスタライト機能の設定(renesas\_mtu0.c)}
+{\small\begin{alltt}
+static void mtu0_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
+\{
+    RMTU0State *mtu0 = opaque;
+    uint64_t latval;
+    /* --アクセスサイズの設定-- */
+    switch(size)\{
+        case 1: latval = val; break;
+        case 2: latval = (uint16_t)val; break;
+        case 4: latval = (uint32_t)val; break;
+        case 8: latval = (uint64_t)val; break;
+        default:
+        latval = 0;
+        break;
+    \}
+    switch (addr) \{
+        /* R_〇〇 レジスタへアクセスされた場合にmtu0->〇〇メンバーに値を書く */
+        case R_TCR:      mtu0->tcr   = latval;   break;
+        case R_TMDR1:    mtu0->tmdr1 = latval;   break;
+        case R_TIORH:    mtu0->tiorh = latval;   break;
+        case R_TIORL:    mtu0->tiorl = latval;   break;
+        case R_TIER:     mtu0->tier  = latval;   break;
+        case R_TSR:      mtu0->tsr   = latval;   break;
+        case R_TCNT:     mtu0->tcnt  = latval;   break;
+        case R_TGRA:     mtu0->tgra  = latval;   break;
+        case R_TGRB:     mtu0->tgrb  = latval;   break;
+        case R_TGRC:     mtu0->tgrc  = latval;   break;
+        case R_TGRD:     mtu0->tgrd  = latval;   break;
+        case R_TGRE:     mtu0->tgre  = latval;   break;
+        case R_TGRF:     mtu0->tgrf  = latval;   break;
+        case R_TIER2:    mtu0->tier2 = latval;   break;
+        case R_TSR2:     mtu0->tsr2  = latval;   break;
+        case R_TBTM:     mtu0->tbtm  = latval;   break;
+        default:
+        break;
+    \}
+\}
+\end{alltt}}
+
+\newpage
+\subparagraph{レジスタリード/ライト機能をメモリ管理構造体のコールバック関数に登録(renesas\_mtu0.c)}
+{\small\begin{alltt}
+static const MemoryRegionOps mtu0_ops = \{
+    .write = mtu0_write,
+    .read  = mtu0_read,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    /* 最大アクセス幅は2バイトに設定 */
+    .impl = \{
+        .min_access_size = 1,
+        .max_access_size = 2,
+    \},
+    .valid = \{
+        .min_access_size = 1,
+        .max_access_size = 2,
+    \},
+\};
+\end{alltt}}
+
+\subparagraph{タイマ―機能の実装(renesas\_mtu0.c)}\mbox{}\\
+タイマー機能はQEMUのイベントタイマーを利用して実装しています。QEMUのタイマーには幾つか種類が有り、用途に応じて使い分けられています。表(\ref{timer-type})に種類をまとめます。
+MTUタイマーでは、既存のRX62Nエミュレーターでの実装を参考にバーチャルクロックを使用します。
+{\small\begin{table}[htbp!]
+    \centering
+    \caption{QEMUが提供するタイマーの種類}
+    \label{timer-type}
+    \begin{tabular}{|l|l|}
+        \hline
+        \multicolumn{1}{|c|}{タイマー種類} & \multicolumn{1}{c|}{動作}                                         \\ \hline
+        リアルタイムクロック                   & 仮想マシンが停止してもカウント継続                                               \\ \hline
+        バーチャルクロック                    & 仮想マシン実行中のみカウント                                                  \\ \hline
+        ホストクロック                      & 仮想マシンが停止してもカウント継続                                               \\ \hline
+        バーチャルRTクロック                  & 仮想マシン実行中のみカウント(例外あり) \\ \hline
+    \end{tabular}
+\end{table}}
+
+\subparagraph{QEMUタイマーによるMTU0カウント更新部}
+{\small\begin{alltt}
+static void timer_events(RMTU0State *mtu0)
+\{
+    int64_t delta, now = qemu_clock_get_us(QEMU_CLOCK_VIRTUAL);
+    int64_t tpsc = (mtu0->tcr & 0x07);
+    int64_t next_time = 0;
+    int64_t min_time = 0;
+    int64_t i;
+    uint32_t diff[4] = {0};
+    int divrate = 1;
+    const int iclk = 96;
+
+    delta = (now - mtu0->tick) * iclk;
+    /*  --分周比の確認(64設定まで)-- */
+    switch(tpsc)\{
+        case 0: divrate = 1;	break;    /*NANOSECONDS_PER_SECOND / (RX62T_ICLK / 1)*/
+        case 1: divrate = 4;	break;    /*NANOSECONDS_PER_SECOND / (RX62T_ICLK / 4)*/
+        case 2: divrate = 16;	break;   /*NANOSECONDS_PER_SECOND / (RX62T_ICLK / 16)*/
+        case 3: divrate = 64;	break;   /*NANOSECONDS_PER_SECOND / (RX62T_ICLK / 64)*/
+        default:				break;
+    \}
+
+    /* --経過時間計算とTCNT更新-- */
+    mtu0->div_round += delta;
+    mtu0->tick = now;
+    next_time = mtu0->div_round / divrate;
+    mtu0->tcnt += next_time;
+    mtu0->div_round \%= divrate;
+    /* --タイマー割込み発行判定-- */
+    tgra_event(mtu0);
+
+    /* --次回割り込み時間 タイマ割を使わない場合は0xFFFFFFFFとする-- */
+    diff[0] = ((mtu0->tier & 0x01) == 0) ? 0xFFFFFFFF : (mtu0->tgra - mtu0->tcnt);
+    diff[1] = ((mtu0->tier & 0x02) == 0) ? 0xFFFFFFFF : (mtu0->tgrb - mtu0->tcnt);
+    diff[2] = ((mtu0->tier & 0x04) == 0) ? 0xFFFFFFFF : (mtu0->tgrc - mtu0->tcnt);
+    diff[3] = ((mtu0->tier & 0x08) == 0) ? 0xFFFFFFFF : (mtu0->tgrd - mtu0->tcnt);
+
+    /* --最も短い時間を次回割り込みとする-- */
+    for (min_time = diff[0], i = 1; i < 4; i++) \{
+        if (min_time > diff[i]) \{
+            min_time = diff[i];
+        \}
+    \}
+
+    /* --次回タイマーイベント設定-- */
+    next_time = (int64_t)(min_time * divrate);
+    next_time /= iclk;
+    next_time += qemu_clock_get_us(QEMU_CLOCK_VIRTUAL);
+    timer_mod(&mtu0->timer, next_time);
+\}
+\end{alltt}}
+
+\subparagraph{MTU0タイマー割込み発行判定部}
+{\small\begin{alltt}
+static void tgra_event(RMTU0State *mtu0)
+\{
+    /* TGIA割込み(TCNTとTGRAをコンペアマッチ) */
+    if(mtu0->tcnt >= mtu0->tgra)\{
+        /* interrupt(割込み許可の確認) */
+        if(mtu0->tier & 0x01)\{
+            qemu_irq_pulse(mtu0->tgia);
+            mtu0->tsr |= 0x01;
+        \}
+        /* tcnt clear(カウンタクリア条件を確認) */
+        if( (mtu0->tcr & 0xE0) == 0x20 )\{
+            mtu0->tcnt = mtu0->tcnt - mtu0->tgra;
+        \}
+    \}
+    /* TGIB */
+    if(mtu0->tcnt >= mtu0->tgrb)\{
+        /* interrupt */
+        if(mtu0->tier & 0x02)\{
+            qemu_irq_pulse(mtu0->tgib);
+            mtu0->tsr |= 0x02;
+        \}
+        /* tcnt clear */
+        if( (mtu0->tcr & 0xE0) == 0x40 )\{
+            mtu0->tcnt = mtu0->tcnt - mtu0->tgrb;
+        \}
+    \}
+    /* TGIC */
+    if(mtu0->tcnt >= mtu0->tgrc)\{
+        /* interrupt */
+        if(mtu0->tier & 0x04)\{
+            qemu_irq_pulse(mtu0->tgic);
+            mtu0->tsr |= 0x04;
+        \}
+        /* tcnt clear */
+        if( (mtu0->tcr & 0xE0) == 0xA0 )\{
+            mtu0->tcnt = mtu0->tcnt - mtu0->tgrc;
+        \}
+    \}
+    /* TGID */
+    if(mtu0->tcnt >= mtu0->tgrd)\{
+        /* interrupt */
+        if(mtu0->tier & 0x08)\{
+            qemu_irq_pulse(mtu0->tgid);
+            mtu0->tsr |= 0x08;
+        \}
+        /* tcnt clear */
+        if( (mtu0->tcr & 0xE0) == 0xC0 )\{
+            mtu0->tcnt = mtu0->tcnt - mtu0->tgrd;
+        \}
+    \}
+\}
+\end{alltt}}
+\subparagraph{モジュールの初期化(renesas\_mtu0.c)}\mbox{}\\
+MTU0モジュールの初期化を実装します。前述のレジスタ、およびレジスタコールバック機能をメモリ管理に登録します。モジュールの絶対アドレスはRX62T取り纏め側で行い、
+ここではモジュールのサイズを登録しています。
+初期化関数の後半で、割込みモジュールの初期化を行っています。こちらでは生成と初期化までを行い、割込みベクター番号はRX62T取りまとめ側で行っています。
+生成した割込みモジュールとベクター番号を紐付けるようなID番号は特に見当たらなかったので、ここでの"sysbus\_init\_irq(割込みモジュール)"の初期化順番と、取り纏め側(Rx62t.c)での
+MTU0モジュール取り込み時の"sysbus\_connect\_irq(mtu0、割込みベクタ番号)"の順番を合わせる必要があるようです。
+最後にMTU0で使用するタイマーを初期化しています。ハードウェアマニュアルよりMTU2～4も含めて、タイマーの開始/停止は別モジュールのTCSYSTR(タイマカウンタシンクロスタート)レジスタより
+行うため、こちらも初期化生成までとなります。
+{\small\begin{alltt}
+static void rmtu0_init(Object *obj)
+\{
+    SysBusDevice *d = SYS_BUS_DEVICE(obj);
+    RMTU0State *mtu0 = RMTU0(obj);
+    /* --MTU0モジュールとレジスタコールバックをメモリ管理に登録(サイズ0x28バイト)-- */
+    memory_region_init_io(&mtu0->memory, OBJECT(mtu0), &mtu0_ops,
+    mtu0, "renesas-mtu0", 0x28);
+    sysbus_init_mmio(d, &mtu0->memory);
+    /* --割込みを初期化 ベクタ―番号は取り纏め側(RX62T)で設定-- */
+    sysbus_init_irq(d, &mtu0->tgia);
+    sysbus_init_irq(d, &mtu0->tgib);
+    sysbus_init_irq(d, &mtu0->tgic);
+    sysbus_init_irq(d, &mtu0->tgid);
+    sysbus_init_irq(d, &mtu0->tciv); /* --未使用-- */
+    sysbus_init_irq(d, &mtu0->tgie);　/* --未使用-- */
+    sysbus_init_irq(d, &mtu0->tgif);　/* --未使用-- */
+    /* --MTU0用QEMUタイマーの初期化(開始/停止は別モジュールより)-- */
+    timer_init_us(&mtu0->timer, QEMU_CLOCK_VIRTUAL, timer_event0, mtu0);
+    /* --別モジュール(MTU)からのMTU0アクセス用-- */
+    gpRMTU0State = mtu0;
+\}
+\end{alltt}}
+
+\newpage
+\paragraph{QEMU-MATLABプロセス間通信の対応(renesas\_mtu34.c)}\mbox{}\\
+図(\ref{abstruct})に示す、RX62T用のBLDC制御プログラムがQEMUを経由してSIMULINK上のBLDCモデルを制御するための共有データ、イベント等プロセス間通信部を作成します。
+\subparagraph{QEMU-MATLAB間共有メモリの作成}\mbox{}\\
+{\small
+    \begin{table}[htbp!]
+        \centering
+        \caption{QEMU-MATLAB間共有メモリハンドル名}
+        \label{sharedmemoryhandle}
+        \begin{tabular}{|l|l|l|}
+            \hline
+            名称              & 用途                  \\ \hline
+            MatBLDCSharedMemory & MATLAB ⇔ QEMU間共有メモリ \\ \hline
+        \end{tabular}
+\end{table}}
+表(\ref{sharedmemory})に共有データの内訳を示します。
+管理の簡単化のため、共有メモリの生成と管理はMTU34モジュールで行います。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{QEMU-MATLAB(SIMULINK)間共有メモリ内訳}
+\label{sharedmemory}
+\begin{tabular}{|l|l|l|l|}
+\hline
+共有メモリアドレス & 名称                   & 主な使用モジュール & 用途                 \\ \hline
+0x00      & QEMU-SIMULINK間同期     & MTU4      & 1:QEMU割込み中、0:非割込み中 \\ \hline
+0x02      & MTU1\_TCNT           & MTU1      & モーターエンコーダとして使用     \\ \hline
+0x04      & MTU2\_TCNT           & MTU2      & 未使用                \\ \hline
+0x06      & MTU3\_TGRD           & MTU3      & U相PWMDuty          \\ \hline
+0x08      & MTU4\_TGRC           & MTU4      & V相PWMDuty          \\ \hline
+0x0A      & MTU4\_TGRD           & MTU4      & W相PWMDuty          \\ \hline
+0x0C      & S12AD0\_ADDR0A       & S12AD0    & U相電流検出             \\ \hline
+0x0E      & S12AD0\_ADDR1        & S12AD0    & W相電流検出             \\ \hline
+0x10      & S12AD0\_ADDR2        & S12AD0    & インバーター電圧検出         \\ \hline
+0x12      & S12AD0\_ADDR3        & S12AD0    & 未使用                \\ \hline
+0x16      & S12AD1\_ADDR1        & S12AD1    & 未使用                \\ \hline
+0x18      & S12AD1\_ADDR2        & S12AD1    & VR可変抵抗値検出          \\ \hline
+0x1A      & S12AD1\_ADDR3        & S12AD1    & 未使用                \\ \hline
+0x1C      & MTU\_TOERA           & MTU共用     & PWM出力許可禁止          \\ \hline
+0x1D      & COM\_OFFSET          & MTU共用     & 未使用                \\ \hline
+0x1E      & TCNT1\_CLEAR\_OFFSET & MTU1      & エンコーダ初期化用          \\ \hline
+\end{tabular}
+\end{table}}
+\subparagraph{windows関連ライブラリ}\mbox{}\\
+QEMU側が用意しているwindows\_api用のライブラリを参照することで、共有メモリや後述のイベント通信機能を生成、使用するための関数群を呼び出すことができます。
+参照方法はいくつかあると思われますがMTU34モジュールでは図(\ref{windows_h})に示すように、main-loop.hを参照しました。
+\begin{figure}[htbp!]
+    \begin{center}
+    \includegraphics[width=8cm]{figures/windows_h-crop.pdf}
+    \end{center}
+    \caption{QEMUが用意するwindows-api用ライブラリの参照}
+    \label{windows_h}
+\end{figure}
+
+\newpage
+\subparagraph{QEMU-MATLAB間イベントの作成}\mbox{}\\
+表(\ref{processevent})に共有データの内訳を示します。
+{\small
+    \begin{table}[htbp!]
+        \centering
+        \caption{QEMU-MATLAB間タイマ―サンプリング通知イベント}
+        \label{processevent}
+        \begin{tabular}{|l|l|l|}
+            \hline
+            イベント番号 & 名称              & 用途                  \\ \hline
+            0x00   & MatBLDCTimerInt & MATLAB → QEMUイベント通知 \\ \hline
+        \end{tabular}
+\end{table}}
+
+\subparagraph{プロセス間通信用共有メモリおよびイベントの作成と初期化}\mbox{}\\
+\textcolor{red}{赤字がイベント}の初期化、\textcolor{blue}{青字は共有メモリ}となります。他、割込みや内部タイマーの初期化はMTU0の方式と同等です。
+{\small\begin{alltt}
+static void rmtu34_init(Object *obj)
+\{
+    SysBusDevice *d = SYS_BUS_DEVICE(obj);
+    RMTU34State *mtu34 = RMTU34(obj);
+    /* --MTU34モジュールとレジスタコールバックをメモリ管理に登録(サイズ0x100バイト)-- */
+    memory_region_init_io(&mtu34->memory, OBJECT(mtu34), &mtu34_ops,
+    mtu34, "renesas-mtu34", 0x100);
+    sysbus_init_mmio(d, &mtu34->memory);
+
+    /* mtu3の割込みを初期化 */
+    sysbus_init_irq(d, &mtu34->tgia_3);
+    sysbus_init_irq(d, &mtu34->tgib_3);
+    sysbus_init_irq(d, &mtu34->tgic_3);
+    sysbus_init_irq(d, &mtu34->tgid_3);
+    sysbus_init_irq(d, &mtu34->tciv_3);
+    /* mtu4-割込みを初期化 */
+    sysbus_init_irq(d, &mtu34->tgia_4);
+    sysbus_init_irq(d, &mtu34->tgib_4);
+    sysbus_init_irq(d, &mtu34->tgic_4);
+    sysbus_init_irq(d, &mtu34->tgid_4);
+    sysbus_init_irq(d, &mtu34->tciv_4);
+
+    /* --MTU3用QEMUタイマーの初期化(開始/停止はMTU共用モジュールより)-- */
+    timer_init_us(&mtu34->timer3, QEMU_CLOCK_VIRTUAL, timer_event3, mtu34);
+    /* --MTU4用QEMUタイマーの初期化(開始/停止はMTU共用モジュールより)-- */
+    timer_init_us(&mtu34->timer4, QEMU_CLOCK_VIRTUAL, timer_event4, mtu34);
+
+    \textcolor{red}{/* (プロセス間通信)SIMULINK からのタイマー通知用WINDOWSイベントの初期化 */
+    gMatBLDCEvent = CreateEvent(NULL, FALSE, FALSE, "MatBLDCTimerInt");}
+
+    \textcolor{blue}{/* (プロセス間通信)SIMULINK　との共有メモリ初期化(サイズは余裕をみて0x100バイト) */
+    MatBLDCComMemory = CreateFileMapping( INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                                          0, 0x100, "MatBLDCSharedMemory" );
+    pMatBLDCComMemory = MapViewOfFile(MatBLDCComMemory, FILE_MAP_WRITE, 0, 0, 0);
+    if(pMatBLDCComMemory == NULL)\{
+        CloseHandle(pMatBLDCComMemory);
+    \}
+    /* 先頭1byteを同期フラグとして使用 */
+    *(uint8_t *)pMatBLDCComMemory = 0;
+    *(uint8_t *)(pMatBLDCComMemory + TOERA_OFFSET) = 0xC0;}
+
+    \textcolor{red}{/* (プロセス間通信)　SIMLINKからのイベント待受け用スレッドの初期化 */
+    qemu_thread_create(&mtu34->thread, "bldc_thread", complementary_pwm,
+    mtu34, QEMU_THREAD_JOINABLE);}
+
+    gpRMTU34State = mtu34;
+\}
+\end{alltt}}
+
+\newpage
+\subparagraph{共有メモリアドレスの公開関数}\mbox{}\\
+表(\ref{sharedmemory})に示すように、MTU34で生成した共有メモリは、ADコンバーター等、他周辺モジュールでも参照するため、共有メモリを参照できる関数を用意しておきます。
+{\small\begin{alltt}
+uint8_t *GetMatBLDCComMemory(void)
+\{
+    return pMatBLDCComMemory;
+\}
+\end{alltt}}
+
+\subparagraph{SIMULINKからのイベント通知待ち受け部}
+{\small\begin{alltt}
+static void *complementary_pwm(void *opaque)
+\{
+    RMTU34State *mtu34 = opaque;
+    DWORD waitResult = WAIT_FAILED;
+
+    /* --SIMLINKからのタイマーイベント待ちループ-- */
+    while (1) \{
+        waitResult =WaitForSingleObject(gMatBLDCEvent, INFINITE);
+        if( (waitResult == WAIT_OBJECT_0) || (waitResult == WAIT_TIMEOUT) )\{
+            /* --MTU4割込みが許可状態でかつ相補PWMモード指定であることを確認-- */
+            if( (mtu34->tier_4 & 0x10) &&
+                ( ( 0x0D <= (mtu34->tmdr1_3&0x0F) ) && ( (mtu34->tmdr1_3&0x0F) <= 0x0F ) ) )\{
+                /* --割込み発行-- */
+                qemu_mutex_lock_iothread();
+                qemu_irq_pulse(mtu34->tciv_4);
+                qemu_mutex_unlock_iothread();
+            \}
+        \}
+        else\{
+            CloseHandle(gMatBLDCEvent);
+        \}
+    \}
+    return NULL;
+\}
+\end{alltt}}
+\subparagraph{共有メモリ参照によるモーターエンコーダー位置計測(renesas\_mtu1.c)}\mbox{}\\
+共有メモリの参照例として、モーターのエンコーダー位置計測を例に挙げます。図(\ref{swspec})や図(\ref{simulink-model})に示すように、エンコーダー位置はSIMULINKモデル上の角度より
+後述するDLL内にてエンコーダーに変換して共有メモリに記録しています。MTU1では位相計数モードが有効の場合に共有メモリのエンコーダーを参照します。
+\subparagraph{MTU1レジスタリード部}
+{\small\begin{alltt}
+static uint64_t mtu1_read(void *opaque, hwaddr addr, unsigned size)
+\{
+    RMTU1State *mtu1 = opaque;
+    uint64_t ret;
+    switch(addr)\{
+        case R_TCR_1:     ret = mtu1->tcr;    break;
+        case R_TMDR1_1:   ret = mtu1->tmdr1;  break;
+        case R_TIOR_1:    ret = mtu1->tiorh;  break;
+        case R_TIER_1:    ret = mtu1->tier;   break;
+        case R_TSR_1:     ret = mtu1->tsr;    break;
+        \uline{case R_TCNT_1:    ret = read_tcnt(mtu1);   break;}
+        case R_TGRA_1:    ret = mtu1->tgra;   break;
+        case R_TGRB_1:    ret = mtu1->tgrb;   break;
+        case R_TICCR_1:	  ret = mtu1->ticcr;  break;
+        default:
+        ret= 0;
+        break;
+    \}
+
+    switch(size)\{
+        case 1: ret = ret; break;
+        case 2: ret = (uint16_t)ret; break;
+        case 4: ret = (uint32_t)ret; break;
+        case 8: ret = (uint64_t)ret; break;
+        default:
+        ret= 0;
+        break;
+    \}
+    return ret;
+\}
+\end{alltt}}
+\subparagraph{MTU1:TCNTレジスタリード部}
+{\small\begin{alltt}
+static uint64_t read_tcnt(RMTU1State *mtu1)
+\{
+    uint8_t * pMatComMemory = NULL;
+    uint16_t tcnt16 = 0;
+    uint32_t tcnt32 = 0;
+    uint64_t ret = 0;
+    /* --位相計数モードの確認-- */
+    if( (0x04<=mtu1->tmdr1)&&(mtu1->tmdr1<=0x07) )\{
+        pMatComMemory = GetMatBLDCComMemory();
+        /* --位相計数モードの場合は共有メモリのMTU1-TCNTのエンコーダ参照-- */
+        tcnt16 = *(uint16_t *)(pMatComMemory+TCNT1_OFFSET);
+        ret = (uint64_t)tcnt16;
+    \}
+    else\{
+        /* --通常モードの場合は内部のTCNTを回答-- */
+        tcnt32 = mtu1->tcnt;
+        ret = (uint64_t)tcnt32;
+    \}
+    return ret;
+\}
+\end{alltt}}
+
+\subsubsection{(評価用)KeyTestモジュールの追加}
+図(評価基板)上のSW機能や、QEMU内RXエミュレーター、およびその上で走るBLDC制御用実行プログラムのデバッグ用としてKeyTestモジュールを
+独自に追加しています。こちらのモジュールは評価用で実マイコンには存在しないものなので、実機評価時は本機能に関するコードは
+コメント化する必要があります。以下KeyTestモジュールに持たせている評価機能を表(\ref{keytest})にまとめます。
+{\small
+\begin{table}[htbp!]
+    \centering
+    \caption{KeyTestモジュールの評価機能}
+    \label{keytest}
+    \begin{tabular}{|l|l|l|l|}
+        \hline
+        \multicolumn{1}{|c|}{機能} & \multicolumn{1}{c|}{内容}        & 補足事項                & キー検出間隔 \\ \hline
+        キーボード入力1                 & 評価基板のSW1ボタンを'sキーに割当て           & 押す毎に駆動/減速を切替え       & 100ms毎 \\ \hline
+        キーボード入力2                 & 評価基板のSW2ボタンを'r'キーに割当て          & 押す毎にリセットON/OFF切替え   & 100ms毎 \\ \hline
+        デバッグ表示                   & printf代替のtprintf(仮)を実行バイナリ側で使用可 & 文字数制限有り(256バイト) & -      \\ \hline
+    \end{tabular}
+\end{table}}
+また、KeyTestモジュールのレジスタアドレスを表(\ref{keytest-reg})に示します。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{KEYTESTモジュールレジスタの内訳}
+\label{keytest-reg}
+\begin{tabular}{|l|l|l|}
+\hline
+レジスタアドレス   & 名称            & 用途                   \\ \hline
+0x000FFD00 & TESTSTATE     & 未使用(評価用)             \\ \hline
+0x000FFD01 & TESTKEY       & キー状態確認               \\ \hline
+0x000FFD02 & FLUSH\_ON     & SENTENCE\_BUFの文字列を出力 \\ \hline
+0x000FFD04 & SENTENCE\_BUF & 文字列用バッファ(tprintfで入力)  \\ \hline
+\end{tabular}
+\end{table}}
+\newpage
+\subparagraph{実行バイナリ側でのtprintf関数の実装例(bldc\_test.c)}
+{\small
+\begin{alltt}
+void tprintf(const char *fmt, ...)
+\{
+    #if 1 /* 実機では#if 0とすること */
+    va_list va;
+    char s[256] = \{'￥0'\};
+    char* psbuf;
+    char* pbuf;
+    unsigned long i;
+    /* --文字列用バッファレジスタの先頭-- */
+    pbuf = (char *)RX62T_KEYTEST_SENTENCE_BUFSTART;
+
+    /* --表示文字列をfmt→sへ保存-- */
+    va_start(va, fmt);
+    vprintf(fmt, va);　/* --実行バイナリ側で表示可能なら表示-- */
+    vsprintf(s, fmt, va);
+    va_end(va);
+
+    /* --文字列データをバッファレジスタへコピー-- */
+    psbuf = s;
+    for(i=0;i<256;i++)\{
+       	*pbuf = *psbuf;
+       	pbuf++;
+       	psbuf++;
+       	if(*psbuf == '￥0')\{
+            *pbuf = *psbuf;
+            break;
+       	\}
+    \}
+    /* --QEMU側でターミナル(MSYS2)に出力+ログ保存-- */
+    *RX62T_KEYTEST_FLUSH_ON = 1;
+#endif
+\}
+\end{alltt}}
+
+\paragraph{QEMU(RX)へのRX62Tエミュレーター追加と実行イメージ}\mbox{}\\
+%\begin{alltt}
+%ユーザー名@DESKTOP-UH9H0UT MINGW64 /c/git_repo/qemu-6.0.0/rx-bin
+%$ ./qemu-system-rx -machine help
+%Supported machines are:
+%gdbsim-r5f562n7      gdb simulator (R5F562N7 MCU and external RAM)
+%gdbsim-r5f562n8      gdb simulator (R5F562N8 MCU and external RAM)
+%\uline{gdbsim-rx62t         gdb simulator (R5F562TADDFH MCU(rx62t) and external RAM)} ← 今回追加
+%none                 empty machine
+%\end{alltt}
+\begin{figure}[htbp!]
+	\begin{center}
+		\includegraphics[width=15cm]{figures/qemu-system-rx-crop.pdf}
+	\end{center}
+	\caption{QEMU-RXエミュレーターへのRX62T追加イメージ}
+	\label{qemu-system-rx}
+\end{figure}
+
+
+
+\end{document}

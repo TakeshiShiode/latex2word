@@ -1,0 +1,124 @@
+\section{はじめに}
+ブラシレスDCモーターは、(ブラシ付き)DCモータと比べて高効率、高出力、高寿命で駆動できます。一方でその性能を引き出すためには、
+別途専用の駆動回路やソフトウェアによる駆動制御が必要となります。
+そしてその性能のカギとなる制御がベクトル制御です。これはブラシレスDCモーターの磁石に対して平行方向をd軸、直角方向をq軸見立てて、
+常に直角方向にトルクを掛け続けるように、電流を制御する方式です。
+DCモータの場合にはその構造上、電流を掛けると巻線コイルに直角方向にトルクが発生するように出来ています。
+ベクトル制御を適用することで、q軸電流を駆動電流に見立てるとブラシレスDCモータもDCモータと同じように考えることが出来ます。
+\begin{figure}[htbp!]
+ \begin{minipage}{0.5\hsize}
+  \begin{center}
+   \includegraphics[width=50mm]{figures/DCモーター-crop.pdf}
+  \end{center}
+  \caption{DCモーターは電池をつなげば回る}
+  \label{dcmotor}
+ \end{minipage}
+ \begin{minipage}{0.5\hsize}
+  \begin{center}
+   \includegraphics[width=90mm]{figures/inverter-crop.pdf}
+  \end{center}
+  \caption{ブラシレスDCモーターは専用回路が必要}
+  \label{bldc}
+ \end{minipage}
+\end{figure}
+\subsection{ハードウェアの進化によりベクトル制御が身近になものに}
+前述のようにベクトル制御は、モーターの磁石に常に直角方向にトルクを掛けますが、そのためには高速で回転するモーターの角度を
+常に監視して制御を掛ける必要が有ります。このことからも高性能な演算能力を持つCPUが必要なことが予想できると思います。
+このような背景からベクトル制御は、産業用ロボットや印刷機、電気自動車などの性能が重視される分野で適用されてきましたが、
+今回のルネサスRX62Tを始めとして、各社から高性能なCPUがリリースされるようになり、比較的安価にベクトル制御環境を手に入れられるようになってきました。
+
+\subsection{高性能ゆえに取り扱いには慎重さが必要}
+とはいえブラシレスDCモーターは、DCモータに比べてハイパワーで、電流値も高めのため取り扱いには注意が必要です。
+ハードディスクや、CDドライブのような小型なものもありますが、ロボットアームや産業用の搬送機器といった比較的大きめの
+重量物の動作、制御でブラシレスDCモーターを必要とする場合が多いと思います。
+そのような場面でベクトル制御を開発する過程において、検討段階でのプログラムのバグによりモーターが振動や暴走してしまうと、
+メカ機構や、基板を破損しかねません。
+ブラシレスDCモーターをDCモーターのように扱えると記載しましたが、逆に言えばDCモーターではそのブラシ機構により電池をつなげると簡単にモーターを回せていた部分を
+新たにソフトウェアで制御しなければならないため、制御も複雑になります。
+
+また、モーターが駆動中のため、ソフトウェアの評価はログトレースとロジアナやオシロによる波形評価がメインで、
+変数をprintfしたり、デバッガでじっくりステップ実行して検証することは難しいです。
+
+\subsection{シミュレーションでベクトル制御を検証}
+そこで、いきなり実機動作に行く前に、シミュレーションを用いてあらかじめベクトル制御プログラムを検証できないか検討します。
+今回は前述のルネサスRX62Tマイコンと、同マイコン上で実行するベクトル制御プログラムを用いて、
+シミュレーションと実機確認を行い、事前検証の効果を確認します。
+シミュレーション構成として、ブラシレスDCモーターの数式モデルをMATLAB/SIMULINKで作成し、マイコン側の実行プログラムを
+動作させるためのエミュレーターとしてQEMUを使用します。
+実機の構成はルネサス社提供の、{\bf RX62T搭載低電圧モータ制御評価システム}を用いました。
+
+\newpage
+\subsection{使用機材}
+実機評価で使用するソフトウェア、およびハードウェア機材を表(\ref{equipmentreal})に示します。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{実機環境(RX62T搭載低電圧モータ制御評価システム)の機材一覧}
+\label{equipmentreal}
+\begin{tabular}{|l|l|l|l|}
+\hline
+\multicolumn{1}{|c|}{名称} & \multicolumn{1}{c|}{役割} & \multicolumn{1}{c|}{ライセンス} & 備考                                                        \\ \hline
+FH6S20E-X81(SPMSM)       & ブラシレスDCモーター             & 有償                         & 日本電産サーボ株式会社製                                              \\ \hline
+\begin{tabular}[c]{@{}l@{}}RX62T搭載\\ 低電圧モータ制御評価システム\end{tabular} &
+  制御基板 &
+  有償 &
+  \begin{tabular}[c]{@{}l@{}}ルネサス\\ エレクトロニクス社製\end{tabular} \\ \hline
+e1エミュレーター                & デバッグエミュレーター             & 有償                         & \begin{tabular}[c]{@{}l@{}}ルネサス\\ エレクトロニクス社製\end{tabular} \\ \hline
+CC-RX &
+  RXマイコン用コンパイラ &
+  \begin{tabular}[c]{@{}l@{}}有償\\ (リンクサイズ128KBまで無償)\end{tabular} &
+  \begin{tabular}[c]{@{}l@{}}ルネサス\\ エレクトロニクス社製\end{tabular} \\ \hline
+e2Studio                 & 統合環境                    & 無償                         & \begin{tabular}[c]{@{}l@{}}ルネサス\\ エレクトロニクス社製\end{tabular} \\ \hline
+\end{tabular}
+\end{table}
+}
+
+\begin{figure}[htbp!]
+\begin{center}
+\includegraphics[width=15cm]{figures/実機環境-crop.pdf}
+\end{center}
+\caption{実機環境の構成}
+\label{実機環境}
+\end{figure}
+
+\newpage
+また、シミュレーション評価で使用したソフトウェア一式を表(\ref{equipmentsim})に示します。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{シミュレーション環境で使用するソフトウェア一覧}
+\label{equipmentsim}
+\begin{tabular}{|l|l|l|l|}
+\hline
+\multicolumn{1}{|c|}{名称} & \multicolumn{1}{c|}{役割} & \multicolumn{1}{c|}{ライセンス} & 備考                                                              \\ \hline
+MATLAB/SIMULINK          & モーターシミュレーション用           & 有償                         & マスワークス合同会社                                                      \\ \hline
+CC-RX &
+  RXマイコン用コンパイラ &
+  \begin{tabular}[c]{@{}l@{}}有償\\ (リンクサイズ \\ 128KBまで無償)\end{tabular} &
+  \begin{tabular}[c]{@{}l@{}}ルネサス\\ エレクトロニクス社製\end{tabular} \\ \hline
+e2Studio                 & 統合環境                    & 無償                         & \begin{tabular}[c]{@{}l@{}}ルネサス\\ エレクトロニクス社製\end{tabular}       \\ \hline
+rx-elf-gdb &
+  RXマイコン用GDBデバッガ &
+  無償 &
+  \begin{tabular}[c]{@{}l@{}}OpenSourceToolsforRENESAS\\ からダウンロードの場合は要登録\end{tabular} \\ \hline
+QEMU-6.0.0               & RXマイコンエミュレート            & 無償                         & \begin{tabular}[c]{@{}l@{}}既存のQEMU-RXに\\ RX62T機能追加\end{tabular} \\ \hline
+VisualStudioCommunity2019 &
+  プロセス間通信用DLL作成 &
+  無償(個人ライセンス) &
+  \begin{tabular}[c]{@{}l@{}}組織ライセンスの場合は\\ エンタープライズ条件\\ により有償\end{tabular} \\ \hline
+\end{tabular}
+\end{table}
+}
+\newpage
+図(\ref{abstruct})にシミュレーション環境の構成を示します。シミュレーション評価の目的は、{\bf RX62Tマイコンを用いたブラシレスDCモーターの制御プログラムを評価する}、です。今回はWindowsPCでのシミュレーションとなるため、"windowsブロック"の上で関連するシミュレーション要素を実行する構成としています。"RX62Tマイコンを用いたブラシレスDCモーターの制御プログラム"は、左上側のサンプルアプリケーションとなります。ここは実機同様にe2Studioで作成し、実行用のROMデーターをビルドします。ブラシレスDCモーターそのものは、図の左側に示すようにMATLAB/SIMULINKでモデリングとシミュレーションを行います。一方、ROMデーターを走らせるためのRX62Tマイコン環境は、左側中ほどに示すように、QEMUを用いて仮想のマイコン基板を作成しています。前述のモーター制御用プログラムは、QEMU上で走るゲストROMとして実行されます。
+
+しかし、このままの状態では、SIMULINKとQEMUの両シミュレーションが別々に実行されてしまい、センサ情報は共有されず、制御割り込みのタイミングも全く取れません。そこで、図の左下側に示すように、QEMU側にプロセス間通信用の共有メモリとイベント通知機能を設けて、これをDLL(ダイナミックリンクファイル)の形でMATLAB側に読込み、シミュレーション時にSIMULINKから呼び出すことで、セン情報と割込タイミングを両シミュレーション間で同期させます。このような構成とすることで、実機での評価と同じようにマイコン上で走るプログラムから、ブラシレスDCモーターを制御する状態を実現しています。
+
+\begin{figure}[htbp!]
+\begin{center}
+\includegraphics[width=17cm]{figures/abstruct-crop.pdf}
+\end{center}
+\caption{シミュレーション環境の構成}
+\label{abstruct}
+\end{figure}
+

@@ -1,0 +1,853 @@
+\newpage
+\section{マイコン側モーター制御プログラムの作成}
+\subsection{プログラムの構成}
+マイコン上で実行するベクトル制御用のプログラムを作成します。もともと{\bf RX62T搭載低電圧モータ制御評価システム}向けのサンプルプログラムがルネサス社より公開されていますが、今回のシミュレーション評価用にファイル構成や制御割込みに変更を加えて起こし直しました。図(\ref{project})に構成を示します。
+\begin{figure}[htbp!]
+    \begin{center}
+    \includegraphics[width=13cm]{figures/project-crop.pdf}
+    \end{center}
+\caption{マイコン用制御プログラムの構成}
+\label{project}
+\end{figure}
+
+また、プロジェクト内の各ファイルについて表(\ref*{project-file})に示します。
+{\small
+\begin{table}[htbp!]
+    \centering
+    \caption{プロジェクトのファイル構成(自動生成分は除く)}
+    \label{project-file}
+    \begin{tabular}{|l|l|l|l|}
+        \hline
+        \multicolumn{1}{|c|}{ファイル構成} & \multicolumn{1}{c|}{役割}                                                  & \multicolumn{1}{c|}{サンプリング周期} & \multicolumn{1}{c|}{備考}                                       \\ \hline
+        bldc\_test                   & main関数およびui制御                                                            & なし                            &                                                               \\ \hline
+        mtu3                         & \begin{tabular}[c]{@{}l@{}}ベクトル制御およびエンコーダ監視\\ (cmt側)速度制御も併合\end{tabular} & 100us                         & \begin{tabular}[c]{@{}l@{}}速度制御は1ms\\ (10回に1回実施)\end{tabular} \\ \hline
+        cmt                          & 速度制御と始動制御(のライブラリ)                                                        & なし                            & 1msの速度制御はmtu3へ併合                                              \\ \hline
+        port                         & ポート設定                                                                    & なし                            &                                                               \\ \hline
+        sns                          & ADセンサ監視、LED、SWポート制御                                                      & なし                            &                                                               \\ \hline
+        safeguard                    & エラー監視                                                                    & なし                            &                                                               \\ \hline
+        hwsetup                      & CPUレジスタ初期設定                                                              & なし                            & 電源ONリセットで実行                                                   \\ \hline
+    \end{tabular}
+\end{table}
+}
+
+\newpage
+\subsection{ソフトウェア仕様}
+\subsubsection{動作仕様}
+テストプログラムでのモーター動作仕様を図(\ref{swspec})に示します。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=17.5cm]{figures/swspec-crop.pdf}
+    \end{center}
+    \caption{モーター動作概要}
+    \label{swspec}
+\end{figure}
+
+\subsubsection{制御仕様}
+図(\ref{swspec})の仕様を実現するためのモーター制御仕様を図(\ref{pispec})に示します。図(\ref{dq-axis})と(\ref*{pispec})に示すようにベクトル制御時は、モーターの駆動方向であるq軸へ
+出力を集中したいため、磁石の軸方向の$i_{d}$電流は0に制御します。本制御のためのパラメーターを表(\ref{ctrlprm})に示します。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=18.5cm]{figures/pispec-crop.pdf}
+    \end{center}
+    \caption{制御仕様}
+    \label{pispec}
+\end{figure}
+
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{制御パラメーター仕様}
+\label{ctrlprm}
+\begin{tabular}{|l|l|l|}
+\hline
+\multicolumn{1}{|c|}{定義} & \multicolumn{1}{c|}{値} & 説明                                                                      \\ \hline
+KP\_SPD       & 0.001  & 速度制御Pゲイン       \\ \hline
+KI\_SPD       & 0.0005 & 速度制御Iゲイン       \\ \hline
+KP\_ID        & 3.0    & id電流制御Pゲイン     \\ \hline
+KI\_ID        & 0.0005 & id電流制御Iゲイン     \\ \hline
+KP\_IQ        & 3.0    & iq電流制御Pゲイン     \\ \hline
+KI\_IQ        & 0.0005 & iq電流制御Iゲイン     \\ \hline
+LPF\_K\_OMEGA & 0.1    & 速度ローパスフィルターゲイン \\ \hline
+LPF\_K\_CURRENT          & 0.1                    & \begin{tabular}[c]{@{}l@{}}電流ローパスフィルターゲイン\\ ※シミュレーション時は1.0\end{tabular} \\ \hline
+\end{tabular}
+\end{table}
+}
+
+\newpage
+\paragraph{マイコンで計算したdq出力がモーターのdq入力に反映されているか確認}\mbox{}\\
+念のため、マイコン側で計算した$v_{d},v_{q}$指令電圧がUVW相を経由してモーター側に$v_{d},v_{q}$として入力されているのか確認しておきます。
+マイコン側で計算した$v_{d},v_{q}$は基板のUVW相各端子からPWM形式で出力するため、まず式(\ref{dq-recv})で示されるdq逆変換で3相出力に戻してから、
+モーターへ入力します。
+\paragraph{マイコン側出力}
+\begin{fleqn}[8pt]
+{\large
+\begin{align}
+    \begin{bmatrix}
+        v_{u} \\
+        v_{v} \\
+        v_{w}
+    \end{bmatrix}
+    =
+    \sqrt{\frac{2}{3}}
+    \begin{bmatrix}
+        cos\theta & -sin\theta \\
+        cos(\theta - \frac{2}{3}\pi) & -sin(\theta - \frac{2}{3}\pi) \\
+        cos(\theta + \frac{2}{3}\pi) & -sin(\theta + \frac{2}{3}\pi)
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    \label{dq-recv}
+\end{align}
+}
+\end{fleqn}
+モーター側ではUVW端子からの入力に対して式(\ref{uvw-dq})でdq変換を掛けて、$v_{d},v_{q}$に変換します。
+そこで、式(\ref{uvw-dq})の$v_{u}\sim v_{w}$を式(\ref{dq-recv})の右辺に置換えて計算してみます。
+\paragraph{モーター側入力}
+\begin{fleqn}[8pt]
+{\large
+\begin{flalign*}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    &=
+    \begin{bmatrix}
+        cos\theta & cos(\theta - \frac{2}{3}\pi) & cos(\theta + \frac{2}{3}\pi) \\
+        -sin\theta & -sin(\theta - \frac{2}{3}\pi) & -sin(\theta + \frac{2}{3}\pi)
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{u} \\
+        v_{v} \\
+        v_{w}
+    \end{bmatrix}
+    \\
+    &= \sqrt{\frac{2}{3}}
+    \begin{bmatrix}
+        cos\theta & cos(\theta - \frac{2}{3}\pi) & cos(\theta + \frac{2}{3}\pi) \\
+        -sin\theta & -sin(\theta - \frac{2}{3}\pi) & -sin(\theta + \frac{2}{3}\pi)
+    \end{bmatrix}
+    \sqrt{\frac{2}{3}}
+    \begin{bmatrix}
+        cos\theta & -sin\theta \\
+        cos(\theta - \frac{2}{3}\pi) & -sin(\theta - \frac{2}{3}\pi) \\
+        cos(\theta + \frac{2}{3}\pi) & -sin(\theta + \frac{2}{3}\pi)
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+\end{flalign*}
+}
+
+ここで、簡単のため$\theta=0$としてみます。
+$\theta≠0$であっても各要素の位相差は変わりませんので計算結果は変わりません。
+{\large
+\begin{flalign*}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    = \sqrt{\frac{2}{3}}
+    \begin{bmatrix}
+        1 & -\frac{1}{2} & -\frac{1}{2} \\
+        0 & \frac{\sqrt{3}}{2} & -\frac{\sqrt{3}}{2}
+    \end{bmatrix}
+    \sqrt{\frac{2}{3}}
+    \begin{bmatrix}
+        1 & 0 \\
+        -\frac{1}{2} & \frac{\sqrt{3}}{2} \\
+        -\frac{1}{2} & -\frac{\sqrt{3}}{2}
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    =\frac{2}{3}
+   \begin{bmatrix}
+        1+\frac{1}{4}+\frac{1}{4} & 0-\frac{\sqrt{3}}{4}+\frac{\sqrt{3}}{4} \\
+        0-\frac{\sqrt{3}}{4}+\frac{\sqrt{3}}{4} & 1+\frac{1}{4}+\frac{1}{4}
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+\end{flalign*}
+}
+\end{fleqn}
+その結果式(\ref{dq-dq})となります。
+これよりマイコン側で計算した$v_{d}ref,v_{q}ref$が、モーターの$v_{d},v_{q}$として作用することが分かります。
+{\large
+\begin{flalign}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    &=\frac{2}{3}
+   \begin{bmatrix}
+        \frac{3}{2} & 0 \\
+        0 & \frac{3}{2}
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    =
+   \begin{bmatrix}
+        1 & 0\\
+        0 & 1
+    \end{bmatrix}
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        v_{d} \\
+        v_{q}
+    \end{bmatrix}
+    \label{dq-dq}
+\end{flalign}
+}
+
+\newpage
+\subsection{main関数およびユーザーインターフェース:bldc\_test.c}
+bldc\_test.cにメイン関数を配置し、SW1ボタンによる制御の開始と停止、およびリセットの監視をしています。図(\ref{sw-state})に動作を示します。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=10cm]{figures/sw-state-crop.pdf}
+    \end{center}
+    \caption{sw1ボタンによる駆動と停止}
+    \label{sw-state}
+\end{figure}
+実装は以下となります。
+\small{
+\begin{alltt}
+void check_bldc_start(void)
+\{
+    static int sBldcStartCnt = 0;
+    switch(gBLDCState)\{
+        case RESET: -----------------初期状態(変数初期化してREADYへ)-------------------
+            sBldcStartCnt = 0;
+            gBLDCStartReq = BLDC_STOP_REQ;
+            gBLDCState = READY;
+            break; -----------------------------------------------------------------
+        case READY: -----------------READY状態(SW1_ON待ち)---------------------------
+            if(get_start_sw() == 1)\{
+                sBldcStartCnt++;
+            \}
+            else\{
+                sBldcStartCnt = 0;
+            \}
+            if(sBldcStartCnt > LATCHCNT)\{
+                sBldcStartCnt = 0;
+                gBLDCStartReq = BLDC_START_REQ;
+                set_bldc_drive_state(START1);
+                bldc_start();
+                gBLDCState = START;
+            \}
+            break; ------------------------------------------------------------------
+        case START: --------------------駆動開始と速度制御-----------------------------
+            if(get_start_sw() == 0)\{
+                sBldcStartCnt++;
+            \}
+            else\{
+                sBldcStartCnt = 0;
+            \}
+            if(sBldcStartCnt > LATCHCNT)\{
+                sBldcStartCnt = 0;
+                gBLDCStartReq = BLDC_STOP_REQ;
+                gBLDCState = STOP;
+            \}
+            break; ------------------------------------------------------------------
+        case STOP: --------------------- 減速制御と再スタート監視-------------------------
+            if(get_start_sw() == 1)\{
+                sBldcStartCnt++;
+            \}
+            else\{
+                sBldcStartCnt = 0;
+            \}
+            if(sBldcStartCnt > LATCHCNT)\{
+                sBldcStartCnt = 0;
+                gBLDCStartReq = BLDC_START_REQ;
+                gBLDCState = START;
+            \}
+            break;
+        default: -------------------------デフォルトはリセット同等処理-----------------------
+            sBldcStartCnt = 0;
+            gBLDCStartReq = BLDC_STOP_REQ;
+            gBLDCState = READY;
+            break;
+    \}
+\}
+\end{alltt}
+}
+sw1ボタンで駆動を開始すると、まず始動制御を行います。
+
+\newpage
+\subsection{始動制御および速度制御:cmt.c}
+始動と速度制御について図(\ref{startmode})に示します。SW1の状態を参照して、始動と速度制御を行います。始動制御は1度実施すればモーターの磁石の位置が定まるため、リセットが入らない限りは実施されません。なお、ファイル名がcmtなっていることからもわかる通り、こちらの制御はもともとcmtタイマで実行されていましたが、SIMULINKとの同期の取り易さを考慮して、モーター制御のmtuタイマー割込みから呼出す方式に変更しています。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=18cm]{figures/startmode-crop.pdf}
+    \end{center}
+    \caption{始動制御と速度制御状態遷移}
+    \label{startmode}
+\end{figure}
+また、速度制御部の計算を図(\ref{spdctrl})に示します。
+\begin{figure}[htbp!]
+    \begin{center}
+        \includegraphics[width=17cm]{figures/spdctrl-crop.pdf}
+    \end{center}
+    \caption{速度制御部のフローチャート}
+    \label{spdctrl}
+\end{figure}
+\small{
+\begin{alltt}
+void bldc_speed_interrupt(void)
+\{
+    float   bldc_speed = 0;
+    static int sBLDCAdustCnt = 0;
+    static float sBLDCTargetSpeed = 0;
+
+    setpsw_i();
+    switch (gBLDCDriveST)\{
+        case START1: ----------------------1回目d軸電流制御--------------------
+            if(gId_ref > START_CURRENT)\{
+                sBLDCAdustCnt = 0;
+                gBLDCDriveST = ADJUST1;
+            \}
+            else\{
+                gId_ref = gId_ref + DELTA_CURRENT;
+            \}
+            break;
+        case ADJUST1: ----------------------1回目磁石位置調整--------------------
+            if(sBLDCAdustCnt > ADJUST_CNT)\{
+                set_encd_pos(0);
+                gId_ref = 0;
+                gBLDCDriveST = START2;
+            \}
+            else\{
+                sBLDCAdustCnt++;
+            \}
+            break;
+        case START2:　 ----------------------2回目d軸電流制御--------------------
+            if(gId_ref > START_CURRENT)\{
+                sBLDCAdustCnt = 0;
+                gBLDCDriveST = ADJUST2;
+            \}
+            else\{
+                gId_ref = gId_ref + DELTA_CURRENT;
+            \}
+        break;
+        case ADJUST2 ----------------------2回目磁石位置調整--------------------
+            if(sBLDCAdustCnt > ADJUST_CNT)\{
+                gId_ref = 0;
+                sBLDCTargetSpeed = get_vr_speed();
+                gBLDCRefSpeed = 0;
+                gBLDCDriveST = DRIVE;
+            \}
+            else\{
+                sBLDCAdustCnt++;
+            \}
+            break;
+        case DRIVE: -------------------モーター速度制御(速度PI制御)------------------
+            gBLDCRefSpeed = gBLDCRefSpeed + BLDC_ACC;
+            if(gBLDCRefSpeed > sBLDCTargetSpeed)\{
+                gBLDCRefSpeed = sBLDCTargetSpeed;
+            \}
+            bldc_speed = get_bldc_speed();
+            gIq_ref = speed_pi_ctrl(gBLDCRefSpeed, bldc_speed, KP_SPD,
+                                    KI_SPD, BLDC_IQ_LIMIT, &gSpdsum);
+            if(get_bldc_start() == BLDC_STOP_REQ)\{
+                gBLDCDriveST = BRAKE;
+            \}
+            break;
+        case BRAKE: ------------------モーター減速停止制御(速度PI制御)-----------------
+            gBLDCRefSpeed = gBLDCRefSpeed - BLDC_DCC;
+            if(gBLDCRefSpeed < 0)\{
+                gBLDCRefSpeed = 0;
+            \}
+            bldc_speed = get_bldc_speed();
+            gIq_ref = speed_pi_ctrl(gBLDCRefSpeed, bldc_speed,
+                                    KP_SPD, KI_SPD, BLDC_IQ_LIMIT, &gSpdsum);
+            if(get_bldc_start() == BLDC_START_REQ)\{
+                sBLDCTargetSpeed = get_vr_speed();
+                gBLDCRefSpeed = 0;
+                gBLDCDriveST = DRIVE;
+            \}
+            break;
+        default:
+            bldc_stop();
+            break;
+    \}
+    clear_cmt0_interrupt();
+\}
+\end{alltt}
+}
+
+\paragraph{速度PI制御部}
+{\small
+\begin{alltt}
+float speed_pi_ctrl(float speed_ref, float speed, float kp, float ki, float limit, float *psum)
+\{
+    float iref, iref_p, iref_i;
+    float spd_diff;
+    /* Δω算出 */
+    spd_diff = speed_ref - speed;
+    /* P項 */
+   	iref_p =kp * spd_diff;
+   	/* I項 */
+    iref_i = *psum;
+   	iref_i = iref_i + ki * spd_diff;
+    /* 積分項上下限チェック */
+    if(iref_i > limit)\{
+       	iref_i = limit;
+    \}
+    else if(iref_i < (-limit) )\{
+       	iref_i = -limit;
+    \}
+    *psum = iref_i;
+    /* PI出力(iq_ref) */
+    iref = iref_p + iref_i;
+    /* iq上下限チェック */
+    if(iref > limit)\{
+       	iref = limit;
+    \}
+    else if(iref < (-limit) )\{
+       	iref = -limit;
+    \}
+    return iref;
+\}
+\end{alltt}
+}
+
+\newpage
+\subsection{ベクトル制御:mtu3.c}
+ブラシレスDCモーター制御のキモとなるベクトル制御計算部になります。前述の速度制御部で求めた目標速度に対して、センサから検出されるUVW電流と、前章で導出したブラシレスDCモーターの$dq$変換モデル(\ref{dq-eq})をもとにモーターに印加する目標電流$v_{d},v_{q}$を求めます。プログラムの流れを表(\ref{vectorprg})に示します。
+\begin{table}[htbp!]
+	\caption{ベクトル制御プログラムの流れ}
+	\label{vectorprg}
+	\begin{center}
+	\begin{tabular}{|l|l|l|}
+		\hline
+		番号 & 作業名称              & 備考                                             \\ \hline
+		1  & UVW相電流検出          &                                                \\ \hline
+		2  & インバーター母船電圧検出(Vdc) & 振幅変調率計算のため                                     \\ \hline
+		3  & モーター速度、位置検出       &                                                \\ \hline
+		4  & エラー判定             &                                                \\ \hline
+		5  & 電流dq変換            & $i_{u}、i_{v}、i_{w} → i_{d}、i_{q}$ \\ \hline
+		6  & 電流PI制御            & 速度制御時は$i_{d}$電流 = 0制御                         \\ \hline
+		7  & 電流逆dq変換           & $i_{d}、i_{q}→ i_{u}、i_{v}、i_{w}$  \\ \hline
+		8  & PWM設定             &                                                \\ \hline
+	\end{tabular}
+	\end{center}
+\end{table}
+\paragraph{モーター制御割り込み(100[$\mu$ s])}
+{\small
+\begin{alltt}
+void bldc_interrupt(void)
+\{
+    /* 電流ベクトル制御 */
+    bldc_current_interrupt();
+    /* 速度PI制御(10回に1回実行) */
+    if( gSpdPICnt > SPEED_PI_CNT)\{
+        bldc_speed_interrupt();
+    \}
+    else\{
+        gSpdPICnt++;
+    \}
+    /* 割込みクリア */
+    clear_mot_interrupt();
+\}
+\end{alltt}
+}
+\newpage
+\paragraph{ベクトル制御部}
+{\small
+\begin{alltt}
+void bldc_current_interrupt(void)
+\{
+    float vdc;
+    float id, iq, id_ref, iq_ref;
+    float vd, vq, decp_vd, decp_vq;
+    float vu, vv, vw;
+    float bldc_refspeed;
+
+    /*1:UVW相電流検出(V相は計算により算出) */
+    clrpsw_i();
+    get_mot_current(&gIu, &gIw);
+    /*2:インバーター母線電圧検出 */
+    vdc = get_mot_vdc();
+    setpsw_i();
+
+    /* 始動時電流調整 */
+    if(gAdjust_Current_Cnt <= CURRENT_ADJ_CNT)\{
+        gAdjust_Iu += LPF_K_CURRENT * (gIu - gAdjust_Iu);
+       	//gIu = -gIu + gAdjust_Iu;
+       	gIu = gIu + gAdjust_Iu;
+       	gAdjust_Iw += LPF_K_CURRENT * (gIw - gAdjust_Iw);
+       	//gIw = -gIw + gAdjust_Iw;
+       	gIw = gIw + gAdjust_Iw;
+        gAdjust_Current_Cnt++;
+    \}
+    else\{
+       	/* 駆動時電流検出 */
+       	//gIu = -gIu + gAdjust_Iu;
+       	//gIw = -gIw + gAdjust_Iw;
+       	gIu = gIu + gAdjust_Iu;
+       	gIw = gIw + gAdjust_Iw;
+       	gIu = gIu_Pre + LPF_K_CURRENT * (gIu - gIu_Pre);
+       	gIu_Pre = gIu;
+       	gIw = gIw_Pre + LPF_K_CURRENT * (gIw - gIw_Pre);
+       	gIw_Pre = gIw;
+    \}
+    gIv = - (gIu + gIw);
+
+    /* 3:モーター速度、位置検出 */
+    get_mot_speed(&gBldc_Angle, &gBldc_Speed);
+
+    /* 4:エラー判定 */
+    check_bldc_error(gIu, gIv, gIw, vdc, gBldc_Speed);
+
+    /* 5:電流dq変換 */
+    dq_conversion(gIu, gIv, gIw, gBldc_Angle);
+    get_dq_current(&id, &iq);
+    get_dq_ref(&id_ref, &iq_ref);
+
+    /* 6:電流PI制御 */
+    vd = currenr_pi_ctrl(id_ref, id, KP_ID, KI_ID, BLDC_VD_LIMIT, &gVdIsum);
+    vq = currenr_pi_ctrl(iq_ref, iq, KP_IQ, KI_IQ, BLDC_VQ_LIMIT, &gVqIsum);
+
+    /* 非干渉制御 */
+    bldc_refspeed = get_bldc_refspeed();
+    decp_vd = bldc_refspeed * BLDC_LQ * iq;
+    decp_vq = gBldc_Speed * (BLDC_LD * id + BLDC_QSI);
+    //decp_vd = 0;
+    //decp_vq = 0;
+    vd = vd - decp_vd;
+    vq = vq + decp_vq;
+
+    /* 7:電流逆dq変換 */
+    dq_reconversion(vd, vq, gBldc_Angle, &vu, &vv, &vw);
+    /* 8:PWM設定 */
+    set_motpwm_uvw(vu, vv, vw, vdc);
+\}
+\end{alltt}
+}
+\paragraph{dq変換部}
+{\small
+\begin{alltt}
+void dq_conversion(float iu, float iv, float iw, float angle)
+\{
+	float id_u, id_v, id_w;
+	float iq_u, iq_v, iq_w;
+    /* Id電流計算 */
+    id_u = cosf(angle) * iu;
+    id_v = cosf(angle - (BLDC_2PI / 3)) * iv;
+    id_w = cosf(angle + (BLDC_2PI / 3)) * iw;
+    gId = BLDC_SQRT_2_3 * (id_u + id_v + id_w);
+     /* Iq電流計算 */
+    iq_u = sinf(angle) * iu;
+    iq_v = sinf(angle - (BLDC_2PI / 3)) * iv;
+    iq_w = sinf(angle + (BLDC_2PI / 3)) * iw;
+    gIq = (-1) * BLDC_SQRT_2_3 * (iq_u + iq_v + iq_w);
+\}
+\end{alltt}
+}
+\paragraph{dq逆変換部}
+{\small
+\begin{alltt}
+void dq_reconversion(float vd_ref, float vq_ref, float angle,
+                     float *pvu, float *pvv, float *pvw)
+\{
+    float vref_u, vref_v, vref_w;
+    float vref_limit = VDC/2;
+    /*------------------------------dq逆変換-------------------------------*/
+    vref_u = BLDC_SQRT_2_3 * (vd_ref * cosf(angle) - vq_ref * sinf(angle) );
+    vref_v = BLDC_SQRT_2_3 * (vd_ref * cosf(angle - BLDC_2PI/3 ) - vq_ref * sinf(angle - BLDC_2PI/3 ) );
+    vref_w = BLDC_SQRT_2_3 * (vd_ref * cosf(angle + BLDC_2PI/3 ) - vq_ref * sinf(angle + BLDC_2PI/3 ) );
+    /*-----変換後各相電圧上下限制限-----*/
+    /*-----------U相------------*/
+    if ( vref_u > vref_limit)\{
+        vref_u = vref_limit;
+    \}
+    else if (vref_u < -vref_limit)\{
+       	vref_u = -vref_limit;
+    \}
+    else\{
+    \}
+    /*-----------V相------------*/
+    if ( vref_v > vref_limit)\{
+        vref_v = vref_limit;
+    \}
+    else if (vref_v < -vref_limit)\{
+       	vref_v = -vref_limit;
+    \}
+    else\{
+    \}
+    /*-----------W相------------*/
+    if ( vref_w > vref_limit)\{
+        vref_w = vref_limit;
+    \}
+    else if (vref_w < -vref_limit)\{
+       	vref_w = -vref_limit;
+    \}
+    else\{
+    \}
+    /*----3相PWMDutyへ割当て----*/
+    *pvu = vref_u;
+    *pvv = vref_v;
+    *pvw = vref_w;
+\}
+\end{alltt}
+}
+
+\paragraph{電流PI制御部}
+{\small
+\begin{alltt}
+float currenr_pi_ctrl(float current_ref, float current, float kp, float ki, float limit, float *psum)
+\{
+    float vref, vref_p, vref_i;
+    float idiff, isum;
+    /* Δi算出 */
+    idiff = current_ref - current;
+    /* P項 */
+   	vref_p = kp * idiff;
+   	/* I項 */
+   	vref_i = *psum;
+    vref_i = vref_i + ki * idiff;
+    /* 積分項上下限チェック */
+    if(vref_i > limit)\{
+       	vref_i = limit;
+    \}
+    else if(vref_i < (-limit) )\{
+       	vref_i = -limit;
+    \}
+    *psum = vref_i;
+    /* PI出力 */
+    vref = vref_p + vref_i;
+    /* 上下限チェック */
+    if(vref > limit)\{
+        vref = limit;
+    \}
+    else if(vref < (-limit) )\{
+       	vref = -limit;
+    \}
+    return vref;
+\}
+\end{alltt}
+}
+
+\newpage
+\paragraph{PWM指令値設定部}\mbox{}\\
+ベクトル制御で計算したUVW各相の$v_{ref}$指令値をPWM指令値として設定します。ここで、BLDCの場合はDCモーターと異なり、モーターへ印加される$v_{ref}$電圧が実質、正弦波形(交流波形)となるため、波形振幅の中心を調整する必要があります。モーターが駆動すると、$v_{ref}$指令値の元となるインバーター母線電圧が変動します。シミュレーションモデルでは簡単のため、DCモーターのように回転速度による逆起電力よって
+インバーター母線電圧(24[V])からの変動分を表現しています。母線電圧が変化した状態で、モーターに正弦波のVref指令電圧を出すには図(\ref{m変調})に示すように波形
+の中心電圧を母線電圧に合わせて調整する必要があります。そこでインバーター母線電圧を$V_{dc}$[V]として計測し、その$\frac{1}{2}$を波形中心としてPWM出力に反映しています。
+また、母線電圧が変化した状態でも(変化前と)同等の出力を得るために、式(\ref{m変調式})のようにPWMデューティを調整しています。
+{\large
+\begin{align}
+    PWM指令値_{uvw} &= \frac{1}{2}PWMキャリア周期\frac{v_{ref}}{V_{dc}振幅}+振幅中心のオフセット電圧
+    \label{m変調式}
+\end{align}
+}
+ここで$V_{dc}振幅=\frac{1}{2}V_{dc}$、振幅中心のオフセット電圧$=\frac{1}{2}V_{dc}$
+
+\begin{figure}[htbp]
+ \begin{minipage}{0.5\hsize}
+  \begin{center}
+    \includegraphics[width=9cm]{figures/emf-crop.pdf}
+  \end{center}
+  \caption{インバーター母線電圧変動のイメージ}
+  \label{emf}
+ \end{minipage}
+ \begin{minipage}{0.5\hsize}
+  \begin{center}
+   \includegraphics[width=9cm]{figures/m変調-crop.pdf}
+  \end{center}
+  \caption{母線電圧変動に伴うVref電圧中心の調整}
+  \label{m変調}
+ \end{minipage}
+\end{figure}
+
+{\small
+\begin{alltt}
+void set_motpwm_uvw(float pwm_u, float pwm_v, float pwm_w, float vdc)
+\{
+    float carrier_half_period, vdc_n;
+
+    carrier_half_period = (float)(SOHO_PWM_PERIOD/2);
+    vdc_n = (vdc / 2);
+
+    pwm_u = -pwm_u;
+    pwm_v = -pwm_v;
+    pwm_w = -pwm_w;
+
+    MTU3.TGRD = (unsigned short)(((pwm_u * carrier_half_period) / vdc_n) + carrier_half_period);
+    MTU4.TGRC = (unsigned short)(((pwm_v * carrier_half_period) / vdc_n) + carrier_half_period);
+    MTU4.TGRD = (unsigned short)(((pwm_w * carrier_half_period) / vdc_n) + carrier_half_period);
+\}
+\end{alltt}}
+
+\newpage
+\subsection{センサ検出:sns.c}
+\paragraph{電流検出}
+{\small
+\begin{alltt}
+void get_mot_current(float *iu, float *iw, float *vdc)
+\{
+    float ad_iu;
+    float ad_iw;
+    float ad_vdc;
+
+    while (S12AD0.ADCSR.BIT.ADST == 1);		/* 変換待ち */
+    ad_iu = (float)S12AD0.ADDR0A;			/* センサ値取得 */
+    ad_iw = (float)S12AD0.ADDR1;
+    ad_vdc = (float)S12AD0.ADDR2;
+    /* AD→電流値変換 */
+    ad_iu = ad_iu - NT_CURRENT_OFFSET;
+    ad_iw = ad_iw - NT_CURRENT_OFFSET;
+    ad_iu = ad_iu * AD_CURRENT_COF;
+    ad_iw = ad_iw * AD_CURRENT_COF;
+    /*---iv電流は別途iu、iwから算出 iv = -(iu + iw)---*/
+    /* AD→電圧変換 */
+    ad_vdc = ad_vdc * AD_VDC_COF;
+    *iu = ad_iu;
+    *iw = ad_iw;
+    *vdc = ad_vdc;
+\}
+\end{alltt}
+}
+\paragraph{インバータ電圧検出}
+{\small
+\begin{alltt}
+float get_mot_vdc(void)
+\{
+    float ad_vdc;
+
+    while (S12AD0.ADCSR.BIT.ADST == 1);	/* 変換待ち */
+    ad_vdc = (float)S12AD0.ADDR2;
+    /* AD→電圧変換 */
+    ad_vdc = ad_vdc * AD_VDC_COF;
+    return ad_vdc;
+\}
+\end{alltt}
+}
+\newpage
+\paragraph{VR設定速度検出}
+{\small
+\begin{alltt}
+float get_vr_speed(void)
+\{
+    unsigned short temp_vr;
+    float trgt_speed;
+
+    while (S12AD1.ADCSR.BIT.ADST == 1);		 /* 変換待ち */
+    temp_vr = S12AD1.ADDR2;					 /* 抵抗値取得*/
+    trgt_speed = (float)temp_vr;
+
+    /* AD→速度変換 */
+    trgt_speed = trgt_speed * VR_SPD_COF + BLDC_MARGIN_MIN_RPM;
+    /* rad/sに変換 */
+    trgt_speed = trgt_speed * RPM_RAD_COF;
+    /* 速度検査 */
+    if(trgt_speed > BLDC_MAX_RAD)\{
+       	trgt_speed = BLDC_MAX_RAD;
+   \}
+    else if(trgt_speed < BLDC_MIN_RAD)\{
+       	trgt_speed = BLDC_MIN_RAD;
+    \}
+    else\{
+    \}
+    trgt_speed = trgt_speed * BLDC_MGPOLE_PAIR;
+    return trgt_speed;
+\}
+\end{alltt}
+}
+\newpage
+\subsection{エラー検出:bldc\_test.c}
+エラー検出の種類は表(\ref{errorjdg})となります。また判定用の処理を以下に示します。
+{\small
+\begin{table}[htbp!]
+\centering
+\caption{エラー番号と判定しきい値}
+\label{errorjdg}
+\begin{tabular}{|l|l|l|}
+\hline
+エラー番号 & 名称         & エラー判定値              \\ \hline
+1     & U相電流超過     & 電流値±4{[}A{]}超過      \\ \hline
+2     & V相電流超過     & 電流値±4{[}A{]}超過      \\ \hline
+3     & W相電流超過     & 電流値±4{[}A{]}超過      \\ \hline
+4     & 電圧超過       & 電圧28{[}V{]}超過       \\ \hline
+5     & 電圧低下       & 電圧0{[}V{]}未満        \\ \hline
+6     & 速度超過       & 回転速度1600{[}rpm{]}超過 \\ \hline
+7     & 電圧超過(割込検出) &                     \\ \hline
+０     & エラー無し      &                     \\ \hline
+\end{tabular}
+\end{table}
+\begin{alltt}
+void check_bldc_error(float iu, float iv, float iw, float vdc, float speed)
+\{
+    /* 電流検査 */
+    if ((iu > BLDC_CURRENT_LIMIT) || (iu < -BLDC_CURRENT_LIMIT))\{
+       	gBldc_Error = BLDC_ERROR_OVERCURRENT_U;     /* U相電流超過 */
+    \}
+    if ((iv > BLDC_CURRENT_LIMIT) || (iv < -BLDC_CURRENT_LIMIT))\{
+       	gBldc_Error = BLDC_ERROR_OVERCURRENT_V;     /* V相電流超過 */
+    \}
+    if ((iw > BLDC_CURRENT_LIMIT) || (iw < -BLDC_CURRENT_LIMIT))\{
+       	gBldc_Error = BLDC_ERROR_OVERCURRENT_W;     /* W相電流超過 */
+    \}
+    /* 電圧確認 */
+    if (vdc > BLDC_HIGHVOLT_LIMIT)\{
+       	gBldc_Error = BLDC_ERROR_OVERVOLTAGE;     	/* 端子電圧超過 */
+    \}
+    if (vdc < BLDC_LOWVOLT_LIMIT)\{
+       	gBldc_Error = BLDC_ERROR_UNDERVOLTAGE;     	/* 端子電圧超過 */
+    \}
+    /* 速度検査 */
+    if (speed > BLDC_SPEED_LIMIT)\{
+       	gBldc_Error = BLDC_ERROR_OVERSPEED;     	/*　速度超過 */
+    \}
+    if(gBldc_Error != BLDC_NO_ERROR)\{
+       	bldc_stop();
+    \}
+\}
+\end{alltt}
+}
+
+\newpage
+\subsection{電源ON初期設定:hwsetup.c}
+{\small
+\begin{alltt}
+void HardwareSetup(void)
+\{
+    /* システムクロック初期化 */
+    SYSTEM.SCKCR.BIT.ICK = 0x00;        /* メイン = 振動子12MHz×8倍(96MHz) */
+    SYSTEM.SCKCR.BIT.PCK = 0x01;        /* 周辺 = 振動子12MHz×4倍(48MHz) */
+
+    /* MTU用モジュール停止解除 */
+    MSTP_MTU = 0;
+    MSTP_S12AD0 = 0;
+    MSTP_S12AD1 = 0;
+
+    /* モータタイマ初期化(電流制御) */
+    initialize_mtu34();
+    initialize_pwm();
+    initialize_mot_interrupt();
+    initialize_encoder();
+    /* モータタイマ初期化(速度制御) */
+    /* initialize_cmt(); 電流制御タイマへ統合 */
+    /* IOポート初期化 */
+    initialize_port();
+    /* センサ類初期化 */
+    initialize_sns();
+    /* 安全機能初期化 */
+    initialize_poe();
+    initialize_wdt();
+    /* SW,LED初期化*/
+    initialize_ui();
+\}
+\end{alltt}
+}
